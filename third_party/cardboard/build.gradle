@@ -1,0 +1,85 @@
+// Cardboard SDK, исходники github.com/googlevr/cardboard v1.35.0 без изменений
+// (каталоги sdk, java_api, proto, third_party). Здесь только сборка под наш проект.
+plugins {
+    id 'com.android.library'
+    id 'com.google.protobuf'
+}
+
+android {
+    namespace = 'com.google.cardboard.sdk'
+    compileSdk = libs.versions.android.compileSdk.get().toInteger()
+    ndkVersion = libs.versions.ndk.get()
+
+    defaultConfig {
+        minSdk = libs.versions.android.minSdk.get().toInteger()
+        consumerProguardFiles 'sdk/proguard-rules.pro', 'java_api/proguard-rules.pro'
+        ndk {
+            // Только 64-битный ARM: приложение для одного современного телефона, так сборка быстрее.
+            abiFilters 'arm64-v8a'
+        }
+        externalNativeBuild.cmake {
+            arguments '-DANDROID_STL=c++_shared'
+        }
+    }
+
+    externalNativeBuild.cmake {
+        path 'CMakeLists.txt'
+        version libs.versions.cmake.get()
+    }
+
+    sourceSets {
+        main {
+            manifest.srcFile 'sdk/qrcode/android/AndroidManifest.xml'
+            java.srcDirs = [
+                    'sdk/qrcode/android/java',
+                    'sdk/device_params/android/java',
+                    'sdk/screen_params/android/java',
+                    'sdk/java_utils/android/java',
+                    'java_api/src/main/java',
+            ]
+            res.srcDirs = [
+                    'sdk/qrcode/android/res',
+                    'java_api/src/main/res',
+            ]
+            proto.srcDirs = ['proto']
+            proto.includes = ['cardboard_device.proto']
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+}
+
+protobuf {
+    protoc {
+        artifact = "com.google.protobuf:protoc:${libs.versions.protobuf.get()}"
+    }
+    generateProtoTasks {
+        all().each { task ->
+            task.builtins {
+                java {
+                    option 'lite'
+                }
+            }
+        }
+    }
+}
+
+dependencies {
+    implementation libs.androidx.appcompat
+    implementation libs.google.material
+    // Сканер QR-кода шлема.
+    implementation libs.playServices.vision
+    api libs.protobuf.javalite
+    implementation libs.jspecify
+}
+
+// Собирает release-.aar и кладёт его в androidApp/libs, откуда его берёт приложение.
+tasks.register('publishAar', Copy) {
+    dependsOn 'assembleRelease'
+    from layout.buildDirectory.file('outputs/aar/cardboard-release.aar')
+    into rootProject.layout.projectDirectory.dir('androidApp/libs')
+    rename { 'cardboard-sdk.aar' }
+}
