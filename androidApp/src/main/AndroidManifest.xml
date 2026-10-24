@@ -28,6 +28,9 @@
             android:name=".headset.HeadsetActivity" />
         <activity
             android:exported="false"
+            android:name=".settings.SettingsActivity" />
+        <activity
+            android:exported="false"
             android:name=".player.PlayerActivity"
             android:configChanges="orientation|screenSize|screenLayout|keyboard|keyboardHidden|navigation"
             android:screenOrientation="landscape"

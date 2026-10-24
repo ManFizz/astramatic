@@ -55,6 +55,9 @@ import com.manfis.astramatic.model.StereoLayout
 import com.manfis.astramatic.model.VideoFormat
 import com.manfis.astramatic.model.VideoFormatDetector
 import com.manfis.astramatic.player.PlayerActivity
+import com.manfis.astramatic.settings.SettingsActivity
+import com.manfis.astramatic.player.Playlist
+import com.manfis.astramatic.player.PlaylistItem
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.UUID
@@ -77,7 +80,7 @@ class LibraryState {
  */
 @Composable
 fun LibraryApp(
-    onPlay: (uri: Uri, name: String, format: VideoFormat) -> Unit,
+    onPlay: (Playlist) -> Unit,
     state: LibraryState = remember { LibraryState() },
     embedded: Boolean = false,
     allowEditing: Boolean = true,
@@ -92,9 +95,13 @@ fun LibraryApp(
 
     BackHandler(enabled = backStack.size > 1) { pop() }
 
-    fun play(entry: MediaEntry) {
-        val uri = entry.playUri ?: return
-        onPlay(uri, entry.name, VideoFormatDetector.detect(entry.name) ?: defaultFormat)
+    fun item(uri: Uri, name: String) = PlaylistItem(uri, name, VideoFormatDetector.detect(name) ?: defaultFormat)
+
+    /** Список — все видео той же папки, чтобы работали «следующий / предыдущий». */
+    fun play(entry: MediaEntry, folder: List<MediaEntry>) {
+        val videos = folder.filter { !it.isDirectory && it.playUri != null }
+        val index = videos.indexOf(entry).takeIf { it >= 0 } ?: return
+        onPlay(Playlist(videos.map { item(it.playUri!!, it.name) }, index))
     }
 
     when (val screen = backStack.last()) {
@@ -109,7 +116,7 @@ fun LibraryApp(
             },
             onOpen = { source, title -> push(Screen.Browse(source, "", title)) },
             onEditServer = { push(Screen.EditServer(it)) },
-            onPickFile = { uri, name -> onPlay(uri, name, VideoFormatDetector.detect(name) ?: defaultFormat) },
+            onPickFile = { uri, name -> onPlay(Playlist.single(item(uri, name))) },
         )
 
         is Screen.Browse -> BrowseScreen(
@@ -205,8 +212,13 @@ private fun HomeScreen(
         Button(onClick = { context.startActivity(Intent(context, PlayerActivity::class.java)) }) {
             Text("Войти в VR")
         }
-        OutlinedButton(onClick = { context.startActivity(Intent(context, HeadsetActivity::class.java)) }) {
-            Text("Настроить шлем")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { context.startActivity(Intent(context, HeadsetActivity::class.java)) }) {
+                Text("Настроить шлем")
+            }
+            OutlinedButton(onClick = { context.startActivity(Intent(context, SettingsActivity::class.java)) }) {
+                Text("Настройки")
+            }
         }
         Text(
             "В плеере: тап — пауза, долгое нажатие — рецентр, кнопка 2D/VR сверху — переключение режима, " +
@@ -239,7 +251,7 @@ private fun BrowseScreen(
     screen: Screen.Browse,
     onBack: () -> Unit,
     onOpenFolder: (MediaEntry) -> Unit,
-    onPlay: (MediaEntry) -> Unit,
+    onPlay: (entry: MediaEntry, folder: List<MediaEntry>) -> Unit,
 ) {
     val context = LocalContext.current
     var entries by remember(screen) { mutableStateOf<List<MediaEntry>?>(null) }
@@ -304,7 +316,7 @@ private fun BrowseScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable { if (entry.isDirectory) onOpenFolder(entry) else onPlay(entry) }
+                            .clickable { if (entry.isDirectory) onOpenFolder(entry) else onPlay(entry, list) }
                             .padding(horizontal = 16.dp, vertical = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp),

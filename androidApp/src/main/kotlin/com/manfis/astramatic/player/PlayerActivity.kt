@@ -39,6 +39,9 @@ import com.manfis.astramatic.model.VideoFormat
 import com.manfis.astramatic.ui.VrMenu
 import com.manfis.astramatic.ui.VrMenuActions
 import com.manfis.astramatic.ui.VrMenuState
+import com.manfis.astramatic.settings.AppSettings
+import com.manfis.astramatic.settings.RemoteAction
+import kotlin.math.hypot
 import kotlin.math.abs
 
 /**
@@ -55,6 +58,9 @@ class PlayerActivity : ComponentActivity() {
 
     private val menu = VrMenuState()
     private val handler = Handler(Looper.getMainLooper())
+    private val settings by lazy { AppSettings.get(this) }
+    private val positions by lazy { ResumePositions(this) }
+    private var playlist: Playlist? = null
 
     private val prefs by lazy { getSharedPreferences("player", MODE_PRIVATE) }
 
@@ -83,6 +89,13 @@ class PlayerActivity : ComponentActivity() {
                 if (videoSize.height > 0) {
                     renderer.videoAspect = videoSize.width * videoSize.pixelWidthHeightRatio / videoSize.height
                 }
+            }
+
+            override fun onPlaybackStateChanged(playbackState: Int) {
+                if (playbackState != Player.STATE_ENDED) return
+                savePosition()
+                val next = playlist?.moved(1)
+                if (settings.autoplayNext && next != null) openPlaylist(next) else showControls()
             }
 
             override fun onPlayerError(error: PlaybackException) {
@@ -153,12 +166,8 @@ class PlayerActivity : ComponentActivity() {
             }
         }
 
-        val uri = intent.data
-        if (uri != null) {
-            openVideo(uri, intent.getStringExtra(EXTRA_TITLE) ?: uri.lastPathSegment ?: "", formatFrom(intent))
-        } else {
-            showMenu(VrMenuState.Tab.Files)
-        }
+        val pending = PendingPlaylist.take()
+        if (pending != null) openPlaylist(pending) else showMenu(VrMenuState.Tab.Files)
     }
 
     private val menuActions = object : VrMenuActions {
@@ -180,23 +189,46 @@ class PlayerActivity : ComponentActivity() {
 
         override fun toggleStereo() = toggleStereoMode()
         override fun recenter() = renderer.recenter()
-        override fun play(uri: Uri, name: String, format: VideoFormat) = openVideo(uri, name, format)
+        override fun play(playlist: Playlist) = openPlaylist(playlist)
+        override fun previousFile() { playlist?.moved(-1)?.let(::openPlaylist) }
+        override fun nextFile() { playlist?.moved(1)?.let(::openPlaylist) }
         override fun headsetSaved() = cardboardView.loadDeviceParams()
         override fun openMenu(tab: VrMenuState.Tab) = showMenu(tab)
         override fun hide() = hideMenu()
         override fun exit() = finish()
     }
 
-    private fun openVideo(uri: Uri, title: String, format: VideoFormat) {
-        player.setMediaItem(MediaItem.fromUri(uri))
+    private fun openPlaylist(next: Playlist) {
+        savePosition()
+        playlist = next
+        val item = next.current
+        player.setMediaItem(MediaItem.fromUri(item.uri))
         player.prepare()
+        if (settings.resumePlayback) positions.get(item.uri)?.let(player::seekTo)
         player.play()
-        menu.title = title
-        menuActions.setFormat(format)
+        menu.title = item.title
+        menu.hasPrevious = next.hasPrevious
+        menu.hasNext = next.hasNext
+        menuActions.setFormat(item.format)
+        handler.removeCallbacks(saveTick)
+        handler.postDelayed(saveTick, SAVE_INTERVAL_MS)
         renderer.hasVideo = true
         renderer.recenter()
         menu.tab = VrMenuState.Tab.Video
         hideMenu()
+    }
+
+    /** Позиция пишется всегда: включить «продолжать с места» можно и позже. */
+    private fun savePosition() {
+        val item = playlist?.current ?: return
+        positions.save(item.uri, player.currentPosition, player.duration)
+    }
+
+    private val saveTick = object : Runnable {
+        override fun run() {
+            if (player.isPlaying) savePosition()
+            handler.postDelayed(this, SAVE_INTERVAL_MS)
+        }
     }
 
     // --- Меню -------------------------------------------------------------------------------
@@ -241,10 +273,47 @@ class PlayerActivity : ComponentActivity() {
     /** Подсветка под взглядом, пока панель в шлеме. */
     private val hoverTick = object : Runnable {
         override fun run() {
-            if (uiHost.place != VrUiHost.Place.Vr) return
+            if (uiHost.place != VrUiHost.Place.Vr) {
+                renderer.dwellProgress = 0f
+                return
+            }
             val gaze = renderer.gaze
             uiHost.hover(gaze?.x, gaze?.y)
+            updateDwell(gaze)
             handler.postDelayed(this, HOVER_INTERVAL_MS)
+        }
+    }
+
+    // Нажатие взглядом: точка простояла на месте dwellMs — нажимаем. Следующее — только после сдвига взгляда.
+    private var dwellAnchor: VrRenderer.Gaze? = null
+    private var dwellStart = 0L
+    private var dwellFired = false
+
+    private fun updateDwell(gaze: VrRenderer.Gaze?) {
+        if (!settings.dwellClick || gaze == null || pressedOnPanel) {
+            dwellAnchor = null
+            renderer.dwellProgress = 0f
+            return
+        }
+        val now = SystemClock.uptimeMillis()
+        val anchor = dwellAnchor
+        if (anchor == null || hypot(gaze.x - anchor.x, gaze.y - anchor.y) > DWELL_RADIUS_PX) {
+            dwellAnchor = gaze
+            dwellStart = now
+            dwellFired = false
+        }
+        if (dwellFired) {
+            renderer.dwellProgress = 0f
+            return
+        }
+        val progress = (now - dwellStart).toFloat() / settings.dwellMs
+        renderer.dwellProgress = progress.coerceAtMost(1f)
+        if (progress >= 1f) {
+            dwellFired = true
+            renderer.dwellProgress = 0f
+            val point = dwellAnchor ?: gaze
+            uiHost.touch(MotionEvent.ACTION_DOWN, point.x, point.y)
+            uiHost.touch(MotionEvent.ACTION_UP, point.x, point.y)
         }
     }
 
@@ -306,6 +375,15 @@ class PlayerActivity : ComponentActivity() {
         if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
             menu.lastKey = "${KeyEvent.keyCodeToString(event.keyCode).removePrefix("KEYCODE_")} · ${event.device?.name ?: "?"}"
         }
+        // Назначение кнопки: следующая нажатая кнопка (кроме «Назад») достаётся выбранному действию.
+        val capturing = menu.capturingKey
+        if (capturing != null && event.keyCode != KeyEvent.KEYCODE_BACK) {
+            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+                settings.keys.assign(capturing, event.keyCode)
+                menu.capturingKey = null
+            }
+            return true
+        }
         // В шлеме меню живёт на виртуальном дисплее: стрелки и OK отправляем туда.
         if (uiHost.place == VrUiHost.Place.Vr) {
             val forwarded = when (event.keyCode) {
@@ -365,44 +443,38 @@ class PlayerActivity : ComponentActivity() {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
-        if (uiHost.place != VrUiHost.Place.Hidden) {
-            // Menu/Start: полоска → меню → скрыть.
-            if (keyCode == KeyEvent.KEYCODE_MENU || keyCode == KeyEvent.KEYCODE_BUTTON_START) {
-                when {
-                    menu.mode == VrMenuState.Mode.Controls -> showMenu(VrMenuState.Tab.Video)
-                    menu.title != null -> hideMenu()
-                }
-                return true
+        val action = settings.keys.actionFor(keyCode)
+            ?: return when (keyCode) {
+                // Отдельные «играть» и «пауза» некоторых пультов — не переназначаются.
+                KeyEvent.KEYCODE_MEDIA_PLAY -> true.also { player.play() }
+                KeyEvent.KEYCODE_MEDIA_PAUSE -> true.also { player.pause() }
+                else -> super.onKeyDown(keyCode, event)
             }
+        // Пока меню открыто, работает только переключение полоска → меню → скрыть.
+        if (uiHost.place != VrUiHost.Place.Hidden && action != RemoteAction.Controls) {
             return super.onKeyDown(keyCode, event)
         }
-        when (keyCode) {
-            KeyEvent.KEYCODE_DPAD_CENTER,
-            KeyEvent.KEYCODE_ENTER,
-            KeyEvent.KEYCODE_SPACE,
-            KeyEvent.KEYCODE_BUTTON_A,
-            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> togglePlayback()
-            KeyEvent.KEYCODE_MEDIA_PLAY -> player.play()
-            KeyEvent.KEYCODE_MEDIA_PAUSE -> player.pause()
-            KeyEvent.KEYCODE_DPAD_LEFT,
-            KeyEvent.KEYCODE_MEDIA_REWIND,
-            KeyEvent.KEYCODE_BUTTON_L1 -> menuActions.seekBy(-SEEK_STEP_MS)
-            KeyEvent.KEYCODE_DPAD_RIGHT,
-            KeyEvent.KEYCODE_MEDIA_FAST_FORWARD,
-            KeyEvent.KEYCODE_BUTTON_R1 -> menuActions.seekBy(SEEK_STEP_MS)
-            KeyEvent.KEYCODE_MEDIA_PREVIOUS -> menuActions.seekBy(-LONG_SEEK_STEP_MS)
-            KeyEvent.KEYCODE_MEDIA_NEXT -> menuActions.seekBy(LONG_SEEK_STEP_MS)
-            KeyEvent.KEYCODE_DPAD_UP,
-            KeyEvent.KEYCODE_BUTTON_Y -> renderer.recenter()
-            KeyEvent.KEYCODE_V,
-            KeyEvent.KEYCODE_BUTTON_X -> toggleStereoMode()
-            KeyEvent.KEYCODE_DPAD_DOWN,
-            KeyEvent.KEYCODE_MENU,
-            KeyEvent.KEYCODE_BUTTON_START,
-            KeyEvent.KEYCODE_BUTTON_SELECT -> showControls()
-            else -> return super.onKeyDown(keyCode, event)
-        }
+        perform(action)
         return true
+    }
+
+    private fun perform(action: RemoteAction) {
+        when (action) {
+            RemoteAction.PlayPause -> togglePlayback()
+            RemoteAction.SeekBack -> menuActions.seekBy(-SEEK_STEP_MS)
+            RemoteAction.SeekForward -> menuActions.seekBy(SEEK_STEP_MS)
+            RemoteAction.SeekBackLong -> menuActions.seekBy(-LONG_SEEK_STEP_MS)
+            RemoteAction.SeekForwardLong -> menuActions.seekBy(LONG_SEEK_STEP_MS)
+            RemoteAction.PreviousFile -> menuActions.previousFile()
+            RemoteAction.NextFile -> menuActions.nextFile()
+            RemoteAction.Recenter -> renderer.recenter()
+            RemoteAction.ToggleStereo -> toggleStereoMode()
+            RemoteAction.Controls -> when {
+                uiHost.place == VrUiHost.Place.Hidden -> showControls()
+                menu.mode == VrMenuState.Mode.Controls -> showMenu(VrMenuState.Tab.Video)
+                menu.title != null -> hideMenu()
+            }
+        }
     }
 
     // --- Режимы -----------------------------------------------------------------------------
@@ -442,6 +514,7 @@ class PlayerActivity : ComponentActivity() {
     }
 
     override fun onStop() {
+        savePosition()
         player.pause()
         super.onStop()
     }
@@ -463,26 +536,7 @@ class PlayerActivity : ComponentActivity() {
         private const val DRAG_INTERVAL_MS = 16L
         private const val HOVER_INTERVAL_MS = 50L
         private const val KEY_STEREO = "stereo"
-        private const val EXTRA_PROJECTION = "projection"
-        private const val EXTRA_STEREO = "stereo"
-        private const val EXTRA_TITLE = "title"
-
-        fun intent(context: Context, uri: Uri, title: String, format: VideoFormat): Intent =
-            Intent(context, PlayerActivity::class.java)
-                .setData(uri)
-                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                .putExtra(EXTRA_TITLE, title)
-                .putExtra(EXTRA_PROJECTION, format.projection.name)
-                .putExtra(EXTRA_STEREO, format.stereo.name)
-
-        private fun formatFrom(intent: Intent): VideoFormat {
-            val default = VideoFormat()
-            return VideoFormat(
-                projection = intent.getStringExtra(EXTRA_PROJECTION)
-                    ?.let { name -> Projection.entries.find { it.name == name } } ?: default.projection,
-                stereo = intent.getStringExtra(EXTRA_STEREO)
-                    ?.let { name -> StereoLayout.entries.find { it.name == name } } ?: default.stereo,
-            )
-        }
+        private const val SAVE_INTERVAL_MS = 5_000L
+        private const val DWELL_RADIUS_PX = 18f
     }
 }

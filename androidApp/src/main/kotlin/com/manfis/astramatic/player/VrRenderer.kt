@@ -62,6 +62,9 @@ class VrRenderer(
 
     data class Gaze(val x: Float, val y: Float)
 
+    /** Заполнение кольца вокруг курсора при нажатии взглядом, 0..1. */
+    @Volatile var dwellProgress = 0f
+
     private val meshes = mapOf(
         Projection.Flat to Meshes.quad(),
         Projection.Dome180 to Meshes.sphere(SPHERE_RADIUS, PI.toFloat()),
@@ -83,6 +86,7 @@ class VrRenderer(
     private var cursorPosition = 0
     private var cursorUv = 0
     private var cursorMvp = 0
+    private var cursorProgress = 0
 
     private val recenterRequested = AtomicBoolean(true)
     /**
@@ -122,6 +126,7 @@ class VrRenderer(
         cursorPosition = GLES20.glGetAttribLocation(cursorProgram, "aPosition")
         cursorUv = GLES20.glGetAttribLocation(cursorProgram, "aUv")
         cursorMvp = GLES20.glGetUniformLocation(cursorProgram, "uMvp")
+        cursorProgress = GLES20.glGetUniformLocation(cursorProgram, "uProgress")
 
         onVideoSurfaceReady(video.create())
         onPanelSurfaceReady(panel.create(PANEL_WIDTH_PX, PANEL_HEIGHT_PX))
@@ -253,6 +258,7 @@ class VrRenderer(
         Matrix.multiplyMM(mvp, 0, projection, 0, viewModel, 0)
         GLES20.glUseProgram(cursorProgram)
         GLES20.glUniformMatrix4fv(cursorMvp, 1, false, mvp, 0)
+        GLES20.glUniform1f(cursorProgress, dwellProgress)
         drawMesh(quad, cursorPosition, cursorUv)
     }
 
@@ -345,7 +351,7 @@ class VrRenderer(
         /** Полоска шириной ±20° от центра; дальше 30° — уже точно смотрят не на неё. */
         private const val CONTROLS_FOLLOW_DEG = 30f
         private const val CONTROLS_FOLLOW_SPEED = 0.08f
-        private const val CURSOR_SIZE = 0.04f
+        private const val CURSOR_SIZE = 0.05f
         private const val CURSOR_LIFT = 0.01f
 
         private const val Z_NEAR = 0.1f
@@ -389,13 +395,21 @@ void main() {
 """
 
         // Белая точка с тёмной обводкой, чтобы была видна на любом фоне.
+        // При нажатии взглядом обводка заполняется по часовой стрелке от верха.
         private const val CURSOR_FRAGMENT_SHADER = """
 precision mediump float;
+uniform float uProgress;
 varying vec2 vUv;
 void main() {
-    float d = length(vUv - 0.5);
+    vec2 p = vUv - 0.5;
+    float d = length(p);
     if (d > 0.5) discard;
-    gl_FragColor = d > 0.32 ? vec4(0.0, 0.0, 0.0, 0.7) : vec4(1.0, 1.0, 1.0, 1.0);
+    if (d <= 0.32) {
+        gl_FragColor = vec4(1.0, 1.0, 1.0, 1.0);
+        return;
+    }
+    float angle = fract(atan(p.x, p.y) / 6.2831853 + 1.0);
+    gl_FragColor = angle < uProgress ? vec4(0.6, 0.45, 1.0, 1.0) : vec4(0.0, 0.0, 0.0, 0.7);
 }
 """
     }
