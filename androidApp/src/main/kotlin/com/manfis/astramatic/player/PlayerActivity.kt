@@ -41,6 +41,9 @@ import com.manfis.astramatic.ui.VrMenuActions
 import com.manfis.astramatic.ui.VrMenuState
 import com.manfis.astramatic.settings.AppSettings
 import com.manfis.astramatic.settings.RemoteAction
+import com.manfis.astramatic.settings.AxisBinding
+import com.manfis.astramatic.settings.KeyBindings
+import android.media.AudioManager
 import kotlin.math.hypot
 import com.manfis.astramatic.library.DarkframeClient
 import com.manfis.astramatic.library.DarkframeStore
@@ -444,13 +447,13 @@ class PlayerActivity : ComponentActivity() {
         }
     }
 
-    // --- Касания экрана (кнопка Cardboard) --------------------------------------------------
+    // --- Нажатие: кнопка Cardboard или действие «Нажатие» на пульте ------------------------
 
     private var pressStart = 0L
     private var pressedOnPanel = false
     private var lastGaze: VrRenderer.Gaze? = null
 
-    /** Пока кнопка зажата на панели, точка нажатия следует за взглядом: так прокручиваются списки и двигаются ползунки. */
+    /** Пока нажатие держат на панели, точка следует за взглядом: так прокручиваются списки и двигаются ползунки. */
     private val dragTick = object : Runnable {
         override fun run() {
             if (!pressedOnPanel) return
@@ -464,54 +467,73 @@ class PlayerActivity : ComponentActivity() {
 
     private fun onScreenTouch(event: MotionEvent) {
         when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN -> {
-                pressStart = event.eventTime
-                val gaze = renderer.gaze
-                if (uiHost.place == VrUiHost.Place.Vr && gaze != null) {
-                    pressedOnPanel = true
-                    lastGaze = gaze
-                    uiHost.touch(MotionEvent.ACTION_DOWN, gaze.x, gaze.y)
-                    handler.postDelayed(dragTick, DRAG_INTERVAL_MS)
-                }
-            }
-
-            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                if (pressedOnPanel) {
-                    pressedOnPanel = false
-                    handler.removeCallbacks(dragTick)
-                    val point = renderer.gaze ?: lastGaze ?: return
-                    val action = if (event.actionMasked == MotionEvent.ACTION_UP) MotionEvent.ACTION_UP else MotionEvent.ACTION_CANCEL
-                    uiHost.touch(action, point.x, point.y)
-                    return
-                }
-                if (event.actionMasked == MotionEvent.ACTION_CANCEL) return
-                val longPress = event.eventTime - pressStart >= LONG_PRESS_MS
-                when {
-                    // Нажатие мимо панели закрывает меню, если есть что смотреть, иначе возвращает панель перед глаза.
-                    uiHost.place == VrUiHost.Place.Vr -> if (menu.title != null) hideMenu() else renderer.placePanelInFront()
-                    longPress -> renderer.recenter()
-                    else -> showControls()
-                }
-            }
+            MotionEvent.ACTION_DOWN -> triggerDown(event.eventTime)
+            MotionEvent.ACTION_UP -> triggerUp(event.eventTime, cancelled = false)
+            MotionEvent.ACTION_CANCEL -> triggerUp(event.eventTime, cancelled = true)
         }
     }
 
-    // --- Пульт и геймпад --------------------------------------------------------------------
+    private fun triggerDown(time: Long) {
+        pressStart = time
+        val gaze = renderer.gaze
+        if (uiHost.place == VrUiHost.Place.Vr && gaze != null) {
+            pressedOnPanel = true
+            lastGaze = gaze
+            uiHost.touch(MotionEvent.ACTION_DOWN, gaze.x, gaze.y)
+            handler.postDelayed(dragTick, DRAG_INTERVAL_MS)
+        }
+    }
+
+    private fun triggerUp(time: Long, cancelled: Boolean) {
+        if (pressedOnPanel) {
+            pressedOnPanel = false
+            handler.removeCallbacks(dragTick)
+            val point = renderer.gaze ?: lastGaze ?: return
+            uiHost.touch(if (cancelled) MotionEvent.ACTION_CANCEL else MotionEvent.ACTION_UP, point.x, point.y)
+            return
+        }
+        if (cancelled) return
+        val longPress = time - pressStart >= LONG_PRESS_MS
+        when {
+            // Нажатие мимо панели закрывает меню, если есть что смотреть, иначе возвращает панель перед глаза.
+            uiHost.place == VrUiHost.Place.Vr -> if (menu.title != null) hideMenu() else renderer.placePanelInFront()
+            uiHost.place == VrUiHost.Place.Screen -> Unit
+            longPress -> renderer.recenter()
+            else -> showControls()
+        }
+    }
+
+    // --- Пульт и геймпад: кнопки ------------------------------------------------------------
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
-            menu.lastKey = "${KeyEvent.keyCodeToString(event.keyCode).removePrefix("KEYCODE_")} · ${event.device?.name ?: "?"}"
+        val down = event.action == KeyEvent.ACTION_DOWN
+        if (down && event.repeatCount == 0) {
+            menu.lastKey = "${KeyBindings.keyName(event.keyCode)} · ${event.device?.name ?: "?"}"
         }
-        // Назначение кнопки: следующая нажатая кнопка (кроме «Назад») достаётся выбранному действию.
+
+        // Назначение кнопки: следующая нажатая кнопка (кроме системной «Назад») достаётся выбранному действию.
         val capturing = menu.capturingKey
-        if (capturing != null && event.keyCode != KeyEvent.KEYCODE_BACK) {
-            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
-                settings.keys.assign(capturing, event.keyCode)
+        if (capturing != null && !capturing.isAxis && event.keyCode != KeyEvent.KEYCODE_BACK) {
+            if (down && event.repeatCount == 0) {
+                settings.keys.assignKey(capturing, event.keyCode)
                 menu.capturingKey = null
             }
             return true
         }
-        // В шлеме меню живёт на виртуальном дисплее: стрелки и OK отправляем туда.
+
+        // Назначения пульта важнее всего остального.
+        val action = settings.keys.actionFor(event.keyCode)
+        if (action != null) {
+            if (action == RemoteAction.Click) {
+                if (down && event.repeatCount == 0) triggerDown(event.eventTime)
+                if (!down) triggerUp(event.eventTime, cancelled = false)
+            } else if (down && (event.repeatCount == 0 || action in REPEATABLE)) {
+                perform(action)
+            }
+            return true
+        }
+
+        // Не назначенные стрелки и OK ходят по меню в шлеме (на экране — сами, как обычно).
         if (uiHost.place == VrUiHost.Place.Vr) {
             val forwarded = when (event.keyCode) {
                 KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN,
@@ -530,63 +552,22 @@ class PlayerActivity : ComponentActivity() {
         return super.dispatchKeyEvent(event)
     }
 
-    // Стик и крестовина геймпада приходят осями, а не кнопками: превращаем их в стрелки.
-    private var stickX = 0
-    private var stickY = 0
-
-    override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
-        if (!event.isFromSource(InputDevice.SOURCE_JOYSTICK) || event.action != MotionEvent.ACTION_MOVE) {
-            return super.dispatchGenericMotionEvent(event)
-        }
-        // Если крестовина и так присылает стрелки кнопками, её ось не трогаем, чтобы не было двойных нажатий.
-        val hatIsKeys = event.device?.hasKeys(KeyEvent.KEYCODE_DPAD_UP)?.firstOrNull() == true
-        val x = axisDirection(event, MotionEvent.AXIS_HAT_X, MotionEvent.AXIS_X, hatIsKeys)
-        val y = axisDirection(event, MotionEvent.AXIS_HAT_Y, MotionEvent.AXIS_Y, hatIsKeys)
-        if (x != stickX) {
-            stickX = x
-            if (x != 0) pressKey(if (x < 0) KeyEvent.KEYCODE_DPAD_LEFT else KeyEvent.KEYCODE_DPAD_RIGHT)
-        }
-        if (y != stickY) {
-            stickY = y
-            if (y != 0) pressKey(if (y < 0) KeyEvent.KEYCODE_DPAD_UP else KeyEvent.KEYCODE_DPAD_DOWN)
-        }
-        return true
-    }
-
-    private fun axisDirection(event: MotionEvent, hatAxis: Int, stickAxis: Int, ignoreHat: Boolean): Int {
-        val hat = if (ignoreHat) 0f else event.getAxisValue(hatAxis)
-        val value = if (abs(hat) > 0.5f) hat else event.getAxisValue(stickAxis)
-        return when {
-            value < -STICK_THRESHOLD -> -1
-            value > STICK_THRESHOLD -> 1
-            else -> 0
-        }
-    }
-
-    private fun pressKey(keyCode: Int) {
-        val now = SystemClock.uptimeMillis()
-        dispatchKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, 0))
-        dispatchKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_UP, keyCode, 0))
-    }
-
-    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
-        val action = settings.keys.actionFor(keyCode)
-            ?: return when (keyCode) {
-                // Отдельные «играть» и «пауза» некоторых пультов — не переназначаются.
-                KeyEvent.KEYCODE_MEDIA_PLAY -> true.also { player.play() }
-                KeyEvent.KEYCODE_MEDIA_PAUSE -> true.also { player.pause() }
-                else -> super.onKeyDown(keyCode, event)
-            }
-        // Пока меню открыто, работает только переключение полоска → меню → скрыть.
-        if (uiHost.place != VrUiHost.Place.Hidden && action != RemoteAction.Controls) {
-            return super.onKeyDown(keyCode, event)
-        }
-        perform(action)
-        return true
+    override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean = when (keyCode) {
+        // Отдельные «играть» и «пауза» некоторых пультов работают всегда.
+        KeyEvent.KEYCODE_MEDIA_PLAY -> true.also { player.play() }
+        KeyEvent.KEYCODE_MEDIA_PAUSE -> true.also { player.pause() }
+        else -> super.onKeyDown(keyCode, event)
     }
 
     private fun perform(action: RemoteAction) {
         when (action) {
+            RemoteAction.Click -> Unit
+            RemoteAction.Back -> onBackPressedDispatcher.onBackPressed()
+            RemoteAction.Controls -> when {
+                uiHost.place == VrUiHost.Place.Hidden -> showControls()
+                menu.mode == VrMenuState.Mode.Controls -> showMenu(VrMenuState.Tab.Video)
+                menu.title != null -> hideMenu()
+            }
             RemoteAction.PlayPause -> togglePlayback()
             RemoteAction.SeekBack -> menuActions.seekBy(-SEEK_STEP_MS)
             RemoteAction.SeekForward -> menuActions.seekBy(SEEK_STEP_MS)
@@ -594,13 +575,131 @@ class PlayerActivity : ComponentActivity() {
             RemoteAction.SeekForwardLong -> menuActions.seekBy(LONG_SEEK_STEP_MS)
             RemoteAction.PreviousFile -> menuActions.previousFile()
             RemoteAction.NextFile -> menuActions.nextFile()
+            RemoteAction.VolumeUp -> volume(AudioManager.ADJUST_RAISE)
+            RemoteAction.VolumeDown -> volume(AudioManager.ADJUST_LOWER)
             RemoteAction.Recenter -> renderer.recenter()
             RemoteAction.ToggleStereo -> toggleStereoMode()
-            RemoteAction.Controls -> when {
-                uiHost.place == VrUiHost.Place.Hidden -> showControls()
-                menu.mode == VrMenuState.Mode.Controls -> showMenu(VrMenuState.Tab.Video)
-                menu.title != null -> hideMenu()
+            RemoteAction.NavUp -> navKey(KeyEvent.KEYCODE_DPAD_UP)
+            RemoteAction.NavDown -> navKey(KeyEvent.KEYCODE_DPAD_DOWN)
+            RemoteAction.NavLeft -> navKey(KeyEvent.KEYCODE_DPAD_LEFT)
+            RemoteAction.NavRight -> navKey(KeyEvent.KEYCODE_DPAD_RIGHT)
+            RemoteAction.NavSelect -> navKey(KeyEvent.KEYCODE_DPAD_CENTER)
+            RemoteAction.ScrollUp -> scrollMenu(SCROLL_STEP)
+            RemoteAction.ScrollDown -> scrollMenu(-SCROLL_STEP)
+            RemoteAction.AxisScroll, RemoteAction.AxisSeek,
+            RemoteAction.AxisNavHorizontal, RemoteAction.AxisNavVertical -> Unit
+        }
+    }
+
+    /** Громкость без системной плашки: в шлеме её всё равно не видно. */
+    private fun volume(direction: Int) {
+        getSystemService(AudioManager::class.java).adjustStreamVolume(AudioManager.STREAM_MUSIC, direction, 0)
+    }
+
+    /** Стрелка или OK — в интерфейс меню, мимо назначений пульта. */
+    private fun navKey(keyCode: Int) {
+        if (uiHost.place == VrUiHost.Place.Hidden) return
+        val now = SystemClock.uptimeMillis()
+        uiHost.key(KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, 0))
+        uiHost.key(KeyEvent(now, now, KeyEvent.ACTION_UP, keyCode, 0))
+    }
+
+    /** [amount] > 0 — вверх. В шлеме — там, куда смотрят, на экране — в центре. */
+    private fun scrollMenu(amount: Float) {
+        if (uiHost.place == VrUiHost.Place.Hidden) return
+        val gaze = if (uiHost.place == VrUiHost.Place.Vr) renderer.gaze else null
+        uiHost.scroll(gaze?.x, gaze?.y, amount)
+    }
+
+    // --- Пульт и геймпад: оси и колесо мыши ------------------------------------------------
+
+    /** Последние значения осей устройства. */
+    private val axisValues = HashMap<Int, Float>()
+
+    /** Положение покоя осей на момент начала назначения: так курки, лежащие на −1, не назначатся сами. */
+    private var captureBaseline: Map<Int, Float>? = null
+    private var navX = 0
+    private var navY = 0
+
+    override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
+        // Колесо мыши (пульты в режиме мыши): прокрутка меню в шлеме. На экране меню прокручивается само.
+        if (event.actionMasked == MotionEvent.ACTION_SCROLL && uiHost.place == VrUiHost.Place.Vr) {
+            scrollMenu(event.getAxisValue(MotionEvent.AXIS_VSCROLL))
+            return true
+        }
+        if (!event.isFromSource(InputDevice.SOURCE_JOYSTICK) || event.action != MotionEvent.ACTION_MOVE) {
+            return super.dispatchGenericMotionEvent(event)
+        }
+
+        val ranges = event.device?.motionRanges.orEmpty().filter { it.isFromSource(InputDevice.SOURCE_JOYSTICK) }
+        val values = ranges.associate { it.axis to event.getAxisValue(it.axis) }
+        val strongest = values.maxByOrNull { abs(it.value) }
+        if (strongest != null && abs(strongest.value) > 0.5f) {
+            menu.lastKey = "${MotionEvent.axisToString(strongest.key).removePrefix("AXIS_")} " +
+                "${"%+.1f".format(strongest.value)} · ${event.device?.name ?: "?"}"
+        }
+
+        val capturing = menu.capturingKey
+        if (capturing?.isAxis == true) {
+            val baseline = captureBaseline ?: values.also { captureBaseline = it }
+            val moved = values.maxByOrNull { abs(it.value - (baseline[it.key] ?: 0f)) }
+            if (moved != null) {
+                val delta = moved.value - (baseline[moved.key] ?: 0f)
+                if (abs(delta) > CAPTURE_THRESHOLD) {
+                    val rest = (baseline[moved.key] ?: 0f).let { if (abs(it) > 0.8f) it.toInt().coerceIn(-1, 1) else 0 }
+                    settings.keys.assignAxis(capturing, AxisBinding(moved.key, inverted = delta < 0, rest = rest))
+                    menu.capturingKey = null
+                    captureBaseline = null
+                }
             }
+            return true
+        }
+        captureBaseline = null
+
+        axisValues.putAll(values)
+        updateAxes()
+        return true
+    }
+
+    /** Отклонение для осевого действия: самая сильная из назначенных на него осей. */
+    private fun axisValue(action: RemoteAction): Float =
+        settings.keys.axisBindings().filter { it.first == action }
+            .map { (_, binding) -> binding.valueOf(axisValues[binding.axis] ?: binding.rest.toFloat()) }
+            .maxByOrNull { abs(it) } ?: 0f
+
+    private fun updateAxes() {
+        // Стрелки меню — по одному шагу на отклонение.
+        val x = direction(axisValue(RemoteAction.AxisNavHorizontal))
+        if (x != navX) {
+            navX = x
+            if (x != 0) navKey(if (x < 0) KeyEvent.KEYCODE_DPAD_LEFT else KeyEvent.KEYCODE_DPAD_RIGHT)
+        }
+        val y = direction(axisValue(RemoteAction.AxisNavVertical))
+        if (y != navY) {
+            navY = y
+            if (y != 0) navKey(if (y < 0) KeyEvent.KEYCODE_DPAD_UP else KeyEvent.KEYCODE_DPAD_DOWN)
+        }
+        // Прокрутка и перемотка — плавно, пока ось отклонена.
+        handler.removeCallbacks(axisTick)
+        if (abs(axisValue(RemoteAction.AxisScroll)) > DEAD_ZONE || abs(axisValue(RemoteAction.AxisSeek)) > DEAD_ZONE) {
+            handler.post(axisTick)
+        }
+    }
+
+    private fun direction(value: Float) = when {
+        value > NAV_THRESHOLD -> 1
+        value < -NAV_THRESHOLD -> -1
+        else -> 0
+    }
+
+    private val axisTick = object : Runnable {
+        override fun run() {
+            val scroll = axisValue(RemoteAction.AxisScroll)
+            val seek = axisValue(RemoteAction.AxisSeek)
+            // Стик вниз (плюс) прокручивает вниз — как колесо от себя.
+            if (abs(scroll) > DEAD_ZONE) scrollMenu(-scroll * AXIS_SCROLL_PER_TICK)
+            if (abs(seek) > DEAD_ZONE) menuActions.seekBy((seek * AXIS_SEEK_MS_PER_TICK).toLong())
+            if (abs(scroll) > DEAD_ZONE || abs(seek) > DEAD_ZONE) handler.postDelayed(this, AXIS_TICK_MS)
         }
     }
 
@@ -665,11 +764,26 @@ class PlayerActivity : ComponentActivity() {
     companion object {
         private const val SEEK_STEP_MS = 10_000L
         private const val LONG_SEEK_STEP_MS = 30_000L
-        private const val STICK_THRESHOLD = 0.6f
         private const val LONG_PRESS_MS = 500L
         private const val DRAG_INTERVAL_MS = 16L
         private const val HOVER_INTERVAL_MS = 50L
         private const val KEY_STEREO = "stereo"
+        private const val SCROLL_STEP = 1f
+        private const val DEAD_ZONE = 0.2f
+        private const val NAV_THRESHOLD = 0.6f
+        private const val CAPTURE_THRESHOLD = 0.6f
+        private const val AXIS_TICK_MS = 50L
+        private const val AXIS_SCROLL_PER_TICK = 0.6f
+        /** При полном отклонении — около 20 секунд видео за секунду. */
+        private const val AXIS_SEEK_MS_PER_TICK = 1_000f
+
+        /** Действия, которые повторяются, пока кнопку держат. */
+        private val REPEATABLE = setOf(
+            RemoteAction.SeekBack, RemoteAction.SeekForward, RemoteAction.SeekBackLong, RemoteAction.SeekForwardLong,
+            RemoteAction.VolumeUp, RemoteAction.VolumeDown,
+            RemoteAction.NavUp, RemoteAction.NavDown, RemoteAction.NavLeft, RemoteAction.NavRight,
+            RemoteAction.ScrollUp, RemoteAction.ScrollDown,
+        )
         private const val SAVE_INTERVAL_MS = 5_000L
         private const val DWELL_RADIUS_PX = 18f
     }

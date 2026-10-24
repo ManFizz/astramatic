@@ -156,8 +156,33 @@ class VrUiHost(
         event.recycle()
     }
 
-    /** Кнопки пульта: стрелки и OK двигают фокус по интерфейсу на панели. */
-    fun key(event: KeyEvent): Boolean = presentation?.window?.decorView?.dispatchKeyEvent(event) ?: false
+    /** Где сейчас живёт интерфейс: окно виртуального дисплея или слой на экране. */
+    private fun root(): android.view.View? = when (place) {
+        Place.Vr -> presentation?.window?.decorView
+        Place.Screen -> composeView
+        Place.Hidden -> null
+    }
+
+    /** Кнопки пульта: стрелки и OK двигают фокус по интерфейсу. */
+    fun key(event: KeyEvent): Boolean = root()?.dispatchKeyEvent(event) ?: false
+
+    /** Прокрутка как колесом мыши в точке (x, y); [amount] > 0 — вверх. На экране — в центре. */
+    fun scroll(x: Float?, y: Float?, amount: Float) {
+        val root = root() ?: return
+        val now = SystemClock.uptimeMillis()
+        val properties = MotionEvent.PointerProperties().apply { id = 0; toolType = MotionEvent.TOOL_TYPE_MOUSE }
+        val coords = MotionEvent.PointerCoords().apply {
+            this.x = x ?: root.width / 2f
+            this.y = y ?: root.height / 2f
+            setAxisValue(MotionEvent.AXIS_VSCROLL, amount)
+        }
+        val event = MotionEvent.obtain(
+            now, now, MotionEvent.ACTION_SCROLL, 1, arrayOf(properties), arrayOf(coords),
+            0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_MOUSE, 0,
+        )
+        root.dispatchGenericMotionEvent(event)
+        event.recycle()
+    }
 
     private companion object {
         /** Плотность виртуального дисплея; размер шрифта не увеличиваем — панель и так крупная. */

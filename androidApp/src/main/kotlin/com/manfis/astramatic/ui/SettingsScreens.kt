@@ -13,6 +13,10 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
+import androidx.compose.material3.Surface
+import androidx.compose.material3.InputChip
+import androidx.compose.foundation.horizontalScroll
+import com.manfis.astramatic.settings.ActionGroup
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -79,56 +83,92 @@ private fun SwitchRow(title: String, hint: String, checked: Boolean, onChange: (
 }
 
 /**
- * Кнопки пульта: что нажато последним и назначения действий, как в играх.
- * Пока [capturing] не null, следующая нажатая кнопка уходит этому действию (ловит активность).
+ * Пульт: что нажато последним и назначения действий, как в играх.
+ * Пока [VrMenuState.capturingKey] не null, следующая кнопка (или отклонённая ось) уходит этому действию —
+ * её ловит активность плеера.
  */
 @Composable
 fun RemoteScreen(state: VrMenuState) {
     val context = LocalContext.current
-    val keys = remember { AppSettings.get(context).keys }
+    val bindings = remember { AppSettings.get(context).keys }
 
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text("Последняя нажатая кнопка", style = MaterialTheme.typography.titleMedium)
+        Text("Последнее, что прислал пульт", style = MaterialTheme.typography.titleMedium)
         Text(
-            state.lastKey ?: "Нажмите любую кнопку на пульте",
+            state.lastKey ?: "Нажмите кнопку или подвигайте стик",
             style = MaterialTheme.typography.titleLarge,
             color = MaterialTheme.colorScheme.primary,
         )
 
         val capturing = state.capturingKey
         if (capturing != null) {
-            Text(
-                "Нажмите на пульте кнопку для «${capturing.title}»…",
-                style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.tertiary,
-            )
-            TextButton(onClick = { state.capturingKey = null }) { Text("Отмена") }
-        }
-
-        HorizontalDivider(Modifier.padding(vertical = 8.dp))
-
-        RemoteAction.entries.forEach { action ->
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(action.title, style = MaterialTheme.typography.bodyLarge)
+            Surface(color = MaterialTheme.colorScheme.tertiaryContainer, shape = MaterialTheme.shapes.medium) {
+                Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        keys.keysOf(action).joinToString(", ") { KeyBindings.keyName(it) }.ifEmpty { "не назначено" },
-                        style = MaterialTheme.typography.bodySmall,
+                        if (capturing.isAxis) "Отклоните стик или нажмите курок для «${capturing.title}»…"
+                        else "Нажмите кнопку на пульте для «${capturing.title}»…",
+                        modifier = Modifier.weight(1f),
+                        color = MaterialTheme.colorScheme.onTertiaryContainer,
                     )
+                    TextButton(onClick = { state.capturingKey = null }) { Text("Отмена") }
                 }
-                TextButton(onClick = { state.capturingKey = action }) { Text("+ Кнопка") }
-                TextButton(onClick = { keys.clear(action) }) { Text("Очистить") }
             }
         }
 
-        OutlinedButton(onClick = { keys.resetAll() }) { Text("Вернуть кнопки по умолчанию") }
+        ActionGroup.entries.forEach { group ->
+            HorizontalDivider(Modifier.padding(vertical = 6.dp))
+            Text(group.title, style = MaterialTheme.typography.titleMedium)
+            RemoteAction.entries.filter { it.group == group }.forEach { action ->
+                BindingRow(action, bindings, onAdd = { state.capturingKey = action })
+            }
+        }
+
+        HorizontalDivider(Modifier.padding(vertical = 6.dp))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { bindings.resetAll() }) { Text("Как было по умолчанию") }
+            OutlinedButton(onClick = { bindings.clearAll() }) { Text("Очистить всё") }
+        }
         Text(
-            "Пока открыто меню, стрелки и OK ходят по нему. «Назад» на пульте закрывает меню и полоску. " +
-                "Стик и крестовина геймпада работают как стрелки, клик мыши — как кнопка Cardboard.",
+            "Не назначенные стрелки и OK по-прежнему ходят по меню, «Назад» системы закрывает его. " +
+                "Колесо мыши (пульты в режиме мыши) прокручивает меню.",
             style = MaterialTheme.typography.bodySmall,
         )
+    }
+}
+
+@Composable
+private fun BindingRow(action: RemoteAction, bindings: KeyBindings, onAdd: () -> Unit) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            Text(action.title, style = MaterialTheme.typography.bodyLarge)
+            val keys = bindings.keysOf(action)
+            val axes = bindings.axesOf(action)
+            if (keys.isEmpty() && axes.isEmpty()) {
+                Text("не назначено", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    keys.forEach { key ->
+                        InputChip(
+                            selected = false,
+                            onClick = { bindings.removeKey(action, key) },
+                            label = { Text(KeyBindings.keyName(key)) },
+                            trailingIcon = { Text("✕") },
+                        )
+                    }
+                    axes.forEach { axis ->
+                        InputChip(
+                            selected = false,
+                            onClick = { bindings.removeAxis(action, axis) },
+                            label = { Text(axis.title) },
+                            trailingIcon = { Text("✕") },
+                        )
+                    }
+                }
+            }
+        }
+        TextButton(onClick = onAdd) { Text(if (action.isAxis) "+ Ось" else "+ Кнопка") }
     }
 }
