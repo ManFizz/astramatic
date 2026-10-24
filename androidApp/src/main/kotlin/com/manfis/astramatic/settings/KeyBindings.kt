@@ -59,6 +59,25 @@ enum class RemoteAction(
     ;
 
     val defaultKeys: Set<Int> = defaults.toSet()
+
+    /** Когда работает ось на этом действии. */
+    val axisContext: AxisContext
+        get() = when (this) {
+            AxisScroll, AxisNavHorizontal, AxisNavVertical -> AxisContext.Menu
+            AxisSeek, AxisZoom -> AxisContext.Viewing
+            // Ось на кнопочном действии (курок на «Нажатии» и т. п.) работает всегда.
+            else -> AxisContext.Always
+        }
+}
+
+/** Когда осевое действие активно: так одна ось может и ходить по меню, и перематывать. */
+enum class AxisContext {
+    Menu,
+    Viewing,
+    Always,
+    ;
+
+    fun overlaps(other: AxisContext) = this == Always || other == Always || this == other
 }
 
 /**
@@ -132,10 +151,17 @@ class KeyBindings(private val prefs: SharedPreferences) {
         saveKeys(action, keysOf(action) + keyCode)
     }
 
+    /**
+     * Одна ось может работать на несколько действий, если они не пересекаются по времени:
+     * действия меню — пока меню открыто, перемотка и приближение — пока закрыто.
+     * Пересекающиеся назначения той же оси снимаются.
+     */
     fun assignAxis(action: RemoteAction, binding: AxisBinding) {
         RemoteAction.entries.forEach { other ->
-            val same = axesOf(other).filter { it.axis == binding.axis }.toSet()
-            if (same.isNotEmpty()) saveAxes(other, axesOf(other) - same)
+            if (other == action || other.axisContext.overlaps(action.axisContext)) {
+                val same = axesOf(other).filter { it.axis == binding.axis }.toSet()
+                if (same.isNotEmpty()) saveAxes(other, axesOf(other) - same)
+            }
         }
         saveAxes(action, axesOf(action) + binding)
     }

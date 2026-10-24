@@ -55,6 +55,7 @@ import kotlinx.coroutines.launch
 import com.manfis.astramatic.settings.AppSettings
 import com.manfis.astramatic.settings.RemoteAction
 import com.manfis.astramatic.settings.AxisBinding
+import com.manfis.astramatic.settings.AxisContext
 import com.manfis.astramatic.settings.KeyBindings
 import android.media.AudioManager
 import kotlin.math.hypot
@@ -831,7 +832,19 @@ class PlayerActivity : ComponentActivity() {
     }
 
     /** Отклонение для осевого действия: самая сильная из назначенных на него осей. */
-    private fun axisValue(action: RemoteAction): Float =
+    private fun axisValue(action: RemoteAction): Float {
+        // Ось, назначенная и на меню, и на просмотр: работает то, что сейчас на экране.
+        val menuOpen = uiHost.place != VrUiHost.Place.Hidden
+        val active = when (action.axisContext) {
+            AxisContext.Menu -> menuOpen
+            AxisContext.Viewing -> !menuOpen
+            AxisContext.Always -> true
+        }
+        if (!active) return 0f
+        return axisBindingValue(action)
+    }
+
+    private fun axisBindingValue(action: RemoteAction): Float =
         settings.keys.axisBindings().filter { it.first == action }
             .map { (_, binding) -> binding.valueOf(axisValues[binding.axis] ?: binding.rest.toFloat()) }
             .maxByOrNull { abs(it) } ?: 0f
