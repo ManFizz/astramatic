@@ -8,9 +8,15 @@ import android.os.Bundle
 import android.view.GestureDetector
 import android.view.KeyEvent
 import android.view.MotionEvent
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
+import android.view.Gravity
 import android.view.WindowManager
+import android.widget.FrameLayout
+import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
+import androidx.annotation.OptIn
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -18,7 +24,9 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
+import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import com.google.cardboard.sdk.CardboardView
 import com.manfis.astramatic.headset.HeadsetActivity
 import com.manfis.astramatic.model.Projection
@@ -30,7 +38,16 @@ class PlayerActivity : ComponentActivity() {
     private lateinit var player: ExoPlayer
     private lateinit var renderer: VrRenderer
     private lateinit var cardboardView: CardboardView
+    private lateinit var modeButton: TextView
 
+    private val prefs by lazy { getSharedPreferences("player", MODE_PRIVATE) }
+
+    /** true — VR (два глаза, линзы), false — обычный плоский показ на экране телефона. */
+    private var stereoMode: Boolean
+        get() = prefs.getBoolean(KEY_STEREO, true)
+        set(value) = prefs.edit().putBoolean(KEY_STEREO, value).apply()
+
+    @OptIn(UnstableApi::class)
     @SuppressLint("ClickableViewAccessibility")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -43,6 +60,8 @@ class PlayerActivity : ComponentActivity() {
         }
 
         player = ExoPlayer.Builder(this)
+            // Умеет и обычные файлы, и smb:// с компьютера.
+            .setMediaSourceFactory(DefaultMediaSourceFactory(AppDataSource.Factory(this)))
             .setSeekBackIncrementMs(SEEK_STEP_MS)
             .setSeekForwardIncrementMs(SEEK_STEP_MS)
             .build()
@@ -73,14 +92,39 @@ class PlayerActivity : ComponentActivity() {
                 renderer.onRendererShutdown()
                 cardboardView.onDestroy()
             }
-            setStereoRenderMode(true)
+            setStereoRenderMode(stereoMode)
             setOnBackButtonClick { finish() }
             // Шестерёнка: ручная настройка шлема. CardboardView перечитывает параметры в onResume.
             setOnSettingsButtonClick {
                 startActivity(Intent(this@PlayerActivity, HeadsetActivity::class.java))
             }
         }
-        setContentView(cardboardView)
+        modeButton = TextView(this).apply {
+            setTextColor(Color.WHITE)
+            textSize = 16f
+            val padH = (16 * resources.displayMetrics.density).toInt()
+            val padV = (8 * resources.displayMetrics.density).toInt()
+            setPadding(padH, padV, padH, padV)
+            background = GradientDrawable().apply {
+                cornerRadius = 20 * resources.displayMetrics.density
+                setColor(0x99000000.toInt())
+            }
+            setOnClickListener { toggleStereoMode() }
+        }
+        updateModeButton()
+        // Кнопка сверху по центру: в режиме VR это стык двух половинок экрана, в линзах её почти не видно.
+        val root = FrameLayout(this).apply {
+            addView(cardboardView)
+            addView(
+                modeButton,
+                FrameLayout.LayoutParams(
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    FrameLayout.LayoutParams.WRAP_CONTENT,
+                    Gravity.TOP or Gravity.CENTER_HORIZONTAL,
+                ).apply { topMargin = (12 * resources.displayMetrics.density).toInt() },
+            )
+        }
+        setContentView(root)
 
         // Кнопка Cardboard — это касание экрана. GL-вид касания не обрабатывает, они доходят до CardboardView.
         val gestures = GestureDetector(this, object : GestureDetector.SimpleOnGestureListener() {
@@ -113,9 +157,22 @@ class PlayerActivity : ComponentActivity() {
             KeyEvent.KEYCODE_BUTTON_R1 -> player.seekForward()
             KeyEvent.KEYCODE_DPAD_UP,
             KeyEvent.KEYCODE_BUTTON_Y -> renderer.recenter()
+            KeyEvent.KEYCODE_V,
+            KeyEvent.KEYCODE_BUTTON_X -> toggleStereoMode()
             else -> return super.onKeyDown(keyCode, event)
         }
         return true
+    }
+
+    private fun toggleStereoMode() {
+        stereoMode = !stereoMode
+        cardboardView.setStereoRenderMode(stereoMode)
+        updateModeButton()
+    }
+
+    /** Подпись — режим, в который кнопка переключит. */
+    private fun updateModeButton() {
+        modeButton.text = if (stereoMode) "2D" else "VR"
     }
 
     private fun togglePlayback() {
@@ -144,6 +201,7 @@ class PlayerActivity : ComponentActivity() {
 
     companion object {
         private const val SEEK_STEP_MS = 10_000L
+        private const val KEY_STEREO = "stereo"
         private const val EXTRA_PROJECTION = "projection"
         private const val EXTRA_STEREO = "stereo"
 

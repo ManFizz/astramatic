@@ -22,6 +22,7 @@ protobufPlugin = "0.10.0"
 googleMaterial = "1.13.0"
 playServicesVision = "20.1.3"
 jspecify = "1.0.0"
+smbj = "0.15.0"
 
 [libraries]
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
@@ -47,6 +48,7 @@ playServices-vision = { module = "com.google.android.gms:play-services-vision", 
 protobuf-javalite = { module = "com.google.protobuf:protobuf-javalite", version.ref = "protobuf" }
 jspecify = { module = "org.jspecify:jspecify", version.ref = "jspecify" }
 media3-exoplayer = { module = "androidx.media3:media3-exoplayer", version.ref = "media3" }
+smbj = { module = "com.hierynomus:smbj", version.ref = "smbj" }
 
 [plugins]
 androidApplication = { id = "com.android.application", version.ref = "agp" }

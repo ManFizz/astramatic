@@ -1,0 +1,488 @@
+package com.manfis.astramatic.ui
+
+import android.Manifest
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.net.Uri
+import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeContentPadding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
+import com.manfis.astramatic.headset.HeadsetActivity
+import com.manfis.astramatic.library.MediaEntry
+import com.manfis.astramatic.library.MediaLibrary
+import com.manfis.astramatic.library.MediaSourceRef
+import com.manfis.astramatic.library.SmbConnections
+import com.manfis.astramatic.library.SmbServer
+import com.manfis.astramatic.model.Projection
+import com.manfis.astramatic.model.StereoLayout
+import com.manfis.astramatic.model.VideoFormat
+import com.manfis.astramatic.model.VideoFormatDetector
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import java.util.UUID
+
+private sealed interface Screen {
+    data object Home : Screen
+    data class Browse(val source: MediaSourceRef, val path: String, val title: String) : Screen
+    data class EditServer(val server: SmbServer?) : Screen
+}
+
+/** Главный экран: источники видео, просмотр папок, формат по умолчанию. */
+@Composable
+fun LibraryApp(onPlay: (uri: Uri, name: String, format: VideoFormat) -> Unit) {
+    val context = LocalContext.current
+    val library = remember { MediaLibrary(context) }
+    val backStack = remember { mutableStateListOf<Screen>(Screen.Home) }
+    var defaultFormat by remember { mutableStateOf(DefaultFormat.load(context)) }
+
+    fun push(screen: Screen) = backStack.add(screen)
+    fun pop() = backStack.removeAt(backStack.lastIndex)
+
+    BackHandler(enabled = backStack.size > 1) { pop() }
+
+    fun play(entry: MediaEntry) {
+        val uri = entry.playUri ?: return
+        onPlay(uri, entry.name, VideoFormatDetector.detect(entry.name) ?: defaultFormat)
+    }
+
+    when (val screen = backStack.last()) {
+        Screen.Home -> HomeScreen(
+            library = library,
+            defaultFormat = defaultFormat,
+            onDefaultFormat = {
+                defaultFormat = it
+                DefaultFormat.save(context, it)
+            },
+            onOpen = { source, title -> push(Screen.Browse(source, "", title)) },
+            onEditServer = { push(Screen.EditServer(it)) },
+            onPickFile = { uri, name -> onPlay(uri, name, VideoFormatDetector.detect(name) ?: defaultFormat) },
+        )
+
+        is Screen.Browse -> BrowseScreen(
+            library = library,
+            screen = screen,
+            onBack = ::pop,
+            onOpenFolder = { push(Screen.Browse(screen.source, it.path, it.name)) },
+            onPlay = ::play,
+        )
+
+        is Screen.EditServer -> EditServerScreen(
+            initial = screen.server,
+            onSave = {
+                library.servers.save(it)
+                SmbConnections.forget(it.id)
+                pop()
+            },
+            onDelete = {
+                library.servers.delete(it.id)
+                SmbConnections.forget(it.id)
+                pop()
+            },
+            onCancel = ::pop,
+        )
+    }
+}
+
+@Composable
+private fun HomeScreen(
+    library: MediaLibrary,
+    defaultFormat: VideoFormat,
+    onDefaultFormat: (VideoFormat) -> Unit,
+    onOpen: (MediaSourceRef, String) -> Unit,
+    onEditServer: (SmbServer?) -> Unit,
+    onPickFile: (Uri, String) -> Unit,
+) {
+    val context = LocalContext.current
+    val servers = remember { library.servers.all() }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            onPickFile(uri, displayName(context, uri))
+        }
+    }
+
+    Column(
+        modifier = Modifier.fillMaxSize().safeContentPadding().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text("AstraMatic", style = MaterialTheme.typography.headlineMedium)
+
+        Text("Источники", style = MaterialTheme.typography.titleMedium)
+        SourceRow("📱", "Видео на телефоне", null) { onOpen(MediaSourceRef.Phone, "Телефон") }
+        servers.forEach { server ->
+            SourceRow("🖥", server.title, "${server.host}\\${server.share}", onEdit = { onEditServer(server) }) {
+                onOpen(MediaSourceRef.Smb(server.id), server.title)
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = { onEditServer(null) }) { Text("+ Компьютер (SMB)") }
+            OutlinedButton(onClick = { picker.launch(arrayOf("video/*")) }) { Text("Открыть файл…") }
+        }
+
+        HorizontalDivider(Modifier.padding(vertical = 8.dp))
+
+        Text("Формат, если не распознан по имени файла", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "Теги в имени вроде _180_LR, _360, _TB, _3dh определяются автоматически.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        OptionRow(Projection.entries, defaultFormat.projection, ::projectionLabel) {
+            onDefaultFormat(defaultFormat.copy(projection = it))
+        }
+        OptionRow(StereoLayout.entries, defaultFormat.stereo, ::stereoLabel) {
+            onDefaultFormat(defaultFormat.copy(stereo = it))
+        }
+
+        HorizontalDivider(Modifier.padding(vertical = 8.dp))
+
+        OutlinedButton(onClick = { context.startActivity(Intent(context, HeadsetActivity::class.java)) }) {
+            Text("Настроить шлем")
+        }
+        Text(
+            "В плеере: тап — пауза, долгое нажатие — рецентр, кнопка 2D/VR сверху — переключение режима, " +
+                "шестерёнка — настройка шлема.\n" +
+                "Пульт/геймпад: OK или A — пауза, ←/→ — перемотка на 10 с, ↑ или Y — рецентр, X — 2D/VR.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+    }
+}
+
+@Composable
+private fun SourceRow(icon: String, title: String, subtitle: String?, onEdit: (() -> Unit)? = null, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text(icon, style = MaterialTheme.typography.headlineSmall)
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            if (subtitle != null) Text(subtitle, style = MaterialTheme.typography.bodySmall)
+        }
+        if (onEdit != null) TextButton(onClick = onEdit) { Text("Изменить") }
+    }
+}
+
+@Composable
+private fun BrowseScreen(
+    library: MediaLibrary,
+    screen: Screen.Browse,
+    onBack: () -> Unit,
+    onOpenFolder: (MediaEntry) -> Unit,
+    onPlay: (MediaEntry) -> Unit,
+) {
+    val context = LocalContext.current
+    var entries by remember(screen) { mutableStateOf<List<MediaEntry>?>(null) }
+    var error by remember(screen) { mutableStateOf<String?>(null) }
+    var reload by remember { mutableIntStateOf(0) }
+    var permissionAsked by remember { mutableStateOf(false) }
+
+    val needsPermission = screen.source == MediaSourceRef.Phone &&
+        ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_VIDEO) != PackageManager.PERMISSION_GRANTED
+    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { reload++ }
+
+    LaunchedEffect(screen, reload) {
+        if (needsPermission) {
+            // Спрашиваем сами только один раз, иначе при «Запретить» диалог бы зациклился.
+            if (!permissionAsked) {
+                permissionAsked = true
+                permission.launch(Manifest.permission.READ_MEDIA_VIDEO)
+            }
+            return@LaunchedEffect
+        }
+        error = null
+        entries = null
+        try {
+            entries = library.list(screen.source, screen.path)
+        } catch (e: Exception) {
+            error = e.describe()
+        }
+    }
+
+    Column(Modifier.fillMaxSize().safeContentPadding()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TextButton(onClick = onBack) { Text("← Назад") }
+            Text(
+                screen.title,
+                style = MaterialTheme.typography.titleLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
+            )
+        }
+        HorizontalDivider()
+
+        val list = entries
+        when {
+            needsPermission -> CenterMessage("Нужен доступ к видео на телефоне.") {
+                Button(onClick = { permission.launch(Manifest.permission.READ_MEDIA_VIDEO) }) { Text("Разрешить") }
+            }
+
+            error != null -> CenterMessage(error!!) {
+                Button(onClick = { reload++ }) { Text("Повторить") }
+            }
+
+            list == null -> CenterMessage("Загрузка…") { CircularProgressIndicator() }
+
+            list.isEmpty() -> CenterMessage("Здесь нет папок и видео.") {}
+
+            else -> LazyColumn(Modifier.fillMaxSize()) {
+                items(list, key = { it.path }) { entry ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { if (entry.isDirectory) onOpenFolder(entry) else onPlay(entry) }
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Text(if (entry.isDirectory) "📁" else "🎬", style = MaterialTheme.typography.titleLarge)
+                        Column(Modifier.weight(1f)) {
+                            Text(entry.name, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            if (!entry.isDirectory) {
+                                val format = VideoFormatDetector.detect(entry.name)
+                                val details = listOfNotNull(
+                                    formatSize(entry.size).takeIf { entry.size > 0 },
+                                    format?.let { "${projectionLabel(it.projection)} ${stereoLabel(it.stereo)}" },
+                                )
+                                if (details.isNotEmpty()) {
+                                    Text(details.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun CenterMessage(text: String, action: @Composable () -> Unit) {
+    Column(
+        modifier = Modifier.fillMaxSize().padding(24.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        Text(text)
+        action()
+    }
+}
+
+@Composable
+private fun EditServerScreen(
+    initial: SmbServer?,
+    onSave: (SmbServer) -> Unit,
+    onDelete: (SmbServer) -> Unit,
+    onCancel: () -> Unit,
+) {
+    val id = remember { initial?.id ?: UUID.randomUUID().toString() }
+    var name by remember { mutableStateOf(initial?.name ?: "") }
+    var address by remember { mutableStateOf(initial?.let { "\\\\${it.host}\\${it.share}" } ?: "") }
+    var user by remember { mutableStateOf(initial?.user ?: "") }
+    var password by remember { mutableStateOf(initial?.password ?: "") }
+    var domain by remember { mutableStateOf(initial?.domain ?: "") }
+    var checking by remember { mutableStateOf(false) }
+    var status by remember { mutableStateOf<String?>(null) }
+    var checkRequest by remember { mutableIntStateOf(0) }
+
+    val parsed = SmbServer.parseAddress(address)
+    fun build(): SmbServer? = parsed?.let { (host, share) ->
+        SmbServer(
+            id = id,
+            name = name.trim(),
+            host = host,
+            share = share,
+            user = user.trim(),
+            password = password,
+            domain = domain.trim(),
+        )
+    }
+
+    LaunchedEffect(checkRequest) {
+        if (checkRequest == 0) return@LaunchedEffect
+        val server = build() ?: return@LaunchedEffect
+        checking = true
+        status = withContext(Dispatchers.IO) {
+            try {
+                SmbConnections.forget(server.id)
+                val count = SmbConnections.list(server, "").size
+                "Подключено, в корне $count элементов."
+            } catch (e: Exception) {
+                e.describe()
+            } finally {
+                SmbConnections.forget(server.id)
+            }
+        }
+        checking = false
+    }
+
+    Column(
+        modifier = Modifier.fillMaxSize().safeContentPadding().verticalScroll(rememberScrollState()).padding(16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(if (initial == null) "Новый компьютер" else "Компьютер", style = MaterialTheme.typography.headlineSmall)
+
+        OutlinedTextField(
+            value = address, onValueChange = { address = it },
+            label = { Text("Адрес общей папки") },
+            placeholder = { Text("\\\\MY-PC\\Videos  или  192.168.1.5/Videos") },
+            singleLine = true, modifier = Modifier.fillMaxWidth(),
+            isError = address.isNotBlank() && parsed == null,
+        )
+        Text(
+            "Имя компьютера или IP и имя общей папки. Папку нужно открыть для общего доступа в Windows: " +
+                "свойства папки → Доступ.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        OutlinedTextField(
+            value = name, onValueChange = { name = it },
+            label = { Text("Название (необязательно)") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = user, onValueChange = { user = it },
+            label = { Text("Пользователь Windows") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+        )
+        OutlinedTextField(
+            value = password, onValueChange = { password = it },
+            label = { Text("Пароль") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+            visualTransformation = PasswordVisualTransformation(),
+        )
+        Text(
+            "Если вход в Windows через учётную запись Microsoft — укажите её почту и пароль от неё (не PIN-код). " +
+                "Пусто — гостевой вход.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        OutlinedTextField(
+            value = domain, onValueChange = { domain = it },
+            label = { Text("Домен (обычно пусто)") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
+        )
+
+        status?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+            Button(enabled = parsed != null, onClick = { build()?.let(onSave) }) { Text("Сохранить") }
+            OutlinedButton(enabled = parsed != null && !checking, onClick = { checkRequest++ }) { Text("Проверить") }
+            if (checking) CircularProgressIndicator()
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(onClick = onCancel) { Text("Отмена") }
+            if (initial != null) TextButton(onClick = { onDelete(initial) }) { Text("Удалить") }
+        }
+    }
+}
+
+@Composable
+private fun <T> OptionRow(options: List<T>, selected: T, label: (T) -> String, onSelect: (T) -> Unit) {
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        options.forEach { option ->
+            FilterChip(
+                selected = option == selected,
+                onClick = { onSelect(option) },
+                label = { Text(label(option)) },
+            )
+        }
+    }
+}
+
+fun projectionLabel(projection: Projection) = when (projection) {
+    Projection.Flat -> "Плоское"
+    Projection.Dome180 -> "180°"
+    Projection.Sphere360 -> "360°"
+}
+
+fun stereoLabel(stereo: StereoLayout) = when (stereo) {
+    StereoLayout.Mono -> "Моно"
+    StereoLayout.SideBySide -> "SBS"
+    StereoLayout.TopBottom -> "Над/под"
+}
+
+private fun formatSize(bytes: Long): String = when {
+    bytes >= 1L shl 30 -> "%.1f ГБ".format(bytes / (1L shl 30).toDouble())
+    bytes >= 1L shl 20 -> "%.0f МБ".format(bytes / (1L shl 20).toDouble())
+    else -> "${bytes / 1024} КБ"
+}
+
+/** Понятное сообщение для частых ошибок SMB. */
+private fun Throwable.describe(): String {
+    val chain = generateSequence(this) { it.cause }.toList()
+    val text = chain.joinToString(" ") { "${it::class.simpleName} ${it.message}" }
+    return when {
+        "STATUS_LOGON_FAILURE" in text -> "Неверный логин или пароль."
+        "STATUS_ACCESS_DENIED" in text -> "Нет доступа к папке для этого пользователя."
+        "STATUS_BAD_NETWORK_NAME" in text -> "Общая папка с таким именем не найдена."
+        "STATUS_OBJECT_NAME_NOT_FOUND" in text || "STATUS_OBJECT_PATH_NOT_FOUND" in text -> "Папка не найдена."
+        chain.any { it is java.net.UnknownHostException } -> "Компьютер с таким именем не найден. Попробуйте IP-адрес."
+        chain.any { it is java.net.ConnectException || it is java.net.SocketTimeoutException } ->
+            "Компьютер не отвечает. Проверьте, что он включён, в той же сети и общий доступ разрешён в брандмауэре."
+        else -> chain.last().message ?: chain.last()::class.simpleName ?: "Неизвестная ошибка"
+    }
+}
+
+private fun displayName(context: Context, uri: Uri): String =
+    context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)
+        ?.use { if (it.moveToFirst()) it.getString(0) else null }
+        ?: uri.lastPathSegment ?: ""
+
+/** Формат по умолчанию для файлов без тегов в имени. */
+private object DefaultFormat {
+    private const val PREFS = "library"
+
+    fun load(context: Context): VideoFormat {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val default = VideoFormat()
+        return VideoFormat(
+            projection = Projection.entries.find { it.name == prefs.getString("projection", null) } ?: default.projection,
+            stereo = StereoLayout.entries.find { it.name == prefs.getString("stereo", null) } ?: default.stereo,
+        )
+    }
+
+    fun save(context: Context, format: VideoFormat) {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
+            .putString("projection", format.projection.name)
+            .putString("stereo", format.stereo.name)
+            .apply()
+    }
+}
