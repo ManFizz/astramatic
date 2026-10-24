@@ -19,8 +19,8 @@ class MainActivity : ComponentActivity() {
         setContent {
             MaterialTheme {
                 Surface(Modifier.fillMaxSize()) {
-                    LibraryApp(onPlay = { uri, _, format ->
-                        startActivity(PlayerActivity.intent(this, uri, format))
+                    LibraryApp(onPlay = { uri, name, format ->
+                        startActivity(PlayerActivity.intent(this, uri, name, format))
                     })
                 }
             }

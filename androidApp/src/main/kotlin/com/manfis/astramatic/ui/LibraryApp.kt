@@ -54,22 +54,37 @@ import com.manfis.astramatic.model.Projection
 import com.manfis.astramatic.model.StereoLayout
 import com.manfis.astramatic.model.VideoFormat
 import com.manfis.astramatic.model.VideoFormatDetector
+import com.manfis.astramatic.player.PlayerActivity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.UUID
 
-private sealed interface Screen {
+internal sealed interface Screen {
     data object Home : Screen
     data class Browse(val source: MediaSourceRef, val path: String, val title: String) : Screen
     data class EditServer(val server: SmbServer?) : Screen
 }
 
-/** Главный экран: источники видео, просмотр папок, формат по умолчанию. */
+/** Где пользователь находится в библиотеке. Вынесено наружу, чтобы переживать переключение вкладок меню. */
+class LibraryState {
+    internal val backStack = mutableStateListOf<Screen>(Screen.Home)
+}
+
+/**
+ * Источники видео, просмотр папок, формат по умолчанию.
+ * [embedded] — внутри меню плеера (без кнопок «Войти в VR», шлема и справки),
+ * [allowEditing] = false — в шлеме, где нельзя набирать текст: компьютеры только просматриваются.
+ */
 @Composable
-fun LibraryApp(onPlay: (uri: Uri, name: String, format: VideoFormat) -> Unit) {
+fun LibraryApp(
+    onPlay: (uri: Uri, name: String, format: VideoFormat) -> Unit,
+    state: LibraryState = remember { LibraryState() },
+    embedded: Boolean = false,
+    allowEditing: Boolean = true,
+) {
     val context = LocalContext.current
     val library = remember { MediaLibrary(context) }
-    val backStack = remember { mutableStateListOf<Screen>(Screen.Home) }
+    val backStack = state.backStack
     var defaultFormat by remember { mutableStateOf(DefaultFormat.load(context)) }
 
     fun push(screen: Screen) = backStack.add(screen)
@@ -85,6 +100,8 @@ fun LibraryApp(onPlay: (uri: Uri, name: String, format: VideoFormat) -> Unit) {
     when (val screen = backStack.last()) {
         Screen.Home -> HomeScreen(
             library = library,
+            embedded = embedded,
+            allowEditing = allowEditing,
             defaultFormat = defaultFormat,
             onDefaultFormat = {
                 defaultFormat = it
@@ -123,6 +140,8 @@ fun LibraryApp(onPlay: (uri: Uri, name: String, format: VideoFormat) -> Unit) {
 @Composable
 private fun HomeScreen(
     library: MediaLibrary,
+    embedded: Boolean,
+    allowEditing: Boolean,
     defaultFormat: VideoFormat,
     onDefaultFormat: (VideoFormat) -> Unit,
     onOpen: (MediaSourceRef, String) -> Unit,
@@ -144,18 +163,25 @@ private fun HomeScreen(
         modifier = Modifier.fillMaxSize().safeContentPadding().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text("AstraMatic", style = MaterialTheme.typography.headlineMedium)
+        if (!embedded) Text("AstraMatic", style = MaterialTheme.typography.headlineMedium)
 
         Text("Источники", style = MaterialTheme.typography.titleMedium)
         SourceRow("📱", "Видео на телефоне", null) { onOpen(MediaSourceRef.Phone, "Телефон") }
         servers.forEach { server ->
-            SourceRow("🖥", server.title, "${server.host}\\${server.share}", onEdit = { onEditServer(server) }) {
+            SourceRow("🖥", server.title, "${server.host}\\${server.share}", onEdit = { onEditServer(server) }.takeIf { allowEditing }) {
                 onOpen(MediaSourceRef.Smb(server.id), server.title)
             }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = { onEditServer(null) }) { Text("+ Компьютер (SMB)") }
-            OutlinedButton(onClick = { picker.launch(arrayOf("video/*")) }) { Text("Открыть файл…") }
+        if (allowEditing) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { onEditServer(null) }) { Text("+ Компьютер (SMB)") }
+                OutlinedButton(onClick = { picker.launch(arrayOf("video/*")) }) { Text("Открыть файл…") }
+            }
+        } else {
+            Text(
+                "Добавить или изменить компьютер можно в 2D-режиме — там работает клавиатура.",
+                style = MaterialTheme.typography.bodySmall,
+            )
         }
 
         HorizontalDivider(Modifier.padding(vertical = 8.dp))
@@ -172,8 +198,13 @@ private fun HomeScreen(
             onDefaultFormat(defaultFormat.copy(stereo = it))
         }
 
+        if (embedded) return@Column
+
         HorizontalDivider(Modifier.padding(vertical = 8.dp))
 
+        Button(onClick = { context.startActivity(Intent(context, PlayerActivity::class.java)) }) {
+            Text("Войти в VR")
+        }
         OutlinedButton(onClick = { context.startActivity(Intent(context, HeadsetActivity::class.java)) }) {
             Text("Настроить шлем")
         }

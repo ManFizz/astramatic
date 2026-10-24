@@ -25,10 +25,15 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import java.util.Locale
 
+/**
+ * [onSaved] — параметры записаны (плееру пора их перечитать).
+ * [closeOnSave] = false — остаться на экране после сохранения: в шлеме так удобнее подбирать значения.
+ */
 @Composable
-fun HeadsetScreen(onBack: () -> Unit) {
+fun HeadsetScreen(onBack: () -> Unit, onSaved: () -> Unit = {}, closeOnSave: Boolean = true) {
     val context = LocalContext.current
     var params by remember { mutableStateOf(HeadsetParams.load(context)) }
+    var status by remember { mutableStateOf<String?>(null) }
 
     Column(
         modifier = Modifier
@@ -105,11 +110,19 @@ fun HeadsetScreen(onBack: () -> Unit) {
             ) { params = params.copy(trayToLensMm = it) }
         }
 
+        status?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
+
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = {
                 val saved = params.save(context)
-                Toast.makeText(context, if (saved) "Сохранено" else "Не удалось сохранить", Toast.LENGTH_SHORT).show()
-                if (saved) onBack()
+                status = if (saved) "Сохранено и применено." else "Не удалось сохранить."
+                if (closeOnSave) {
+                    Toast.makeText(context, status, Toast.LENGTH_SHORT).show()
+                }
+                if (saved) {
+                    onSaved()
+                    if (closeOnSave) onBack()
+                }
             }) { Text("Сохранить") }
             OutlinedButton(onClick = { params = HeadsetParams.CardboardV1 }) { Text("Как Cardboard v1") }
             OutlinedButton(onClick = onBack) { Text("Назад") }
