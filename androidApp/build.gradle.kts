@@ -36,6 +36,16 @@ dependencies {
     debugImplementation(libs.compose.uiTooling)
 }
 
+// Версия из git: номер сборки — число коммитов, плюс короткий хеш; «*» — есть незакоммиченные правки.
+// По ним на главной видно, та ли версия стоит на телефоне.
+fun git(vararg args: String): String? = runCatching {
+    providers.exec { commandLine("git", *args) }.standardOutput.asText.get().trim()
+}.getOrNull()?.takeIf { it.isNotEmpty() }
+
+val commitCount = git("rev-list", "--count", "HEAD")?.toIntOrNull() ?: 1
+val commitHash = git("rev-parse", "--short", "HEAD") ?: "unknown"
+val commitDirty = git("status", "--porcelain") != null
+
 android {
     namespace = "com.manfis.astramatic"
     compileSdk = libs.versions.android.compileSdk.get().toInt()
@@ -44,8 +54,9 @@ android {
         applicationId = "com.manfis.astramatic"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = commitCount
+        versionName = "1.0.$commitCount"
+        buildConfigField("String", "COMMIT", "\"$commitHash${if (commitDirty) "*" else ""}\"")
         ndk {
             abiFilters += "arm64-v8a"
         }
@@ -91,5 +102,6 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }

@@ -68,6 +68,8 @@ import com.manfis.astramatic.settings.SettingsActivity
 import com.manfis.astramatic.player.Playlist
 import com.manfis.astramatic.player.PlaylistItem
 import com.manfis.astramatic.player.History
+import com.manfis.astramatic.BuildConfig
+import androidx.compose.foundation.layout.Spacer
 import com.manfis.astramatic.player.HistoryEntry
 import android.text.format.DateUtils
 import androidx.compose.foundation.background
@@ -235,7 +237,16 @@ private fun HomeScreen(
         modifier = Modifier.fillMaxSize().safeContentPadding().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        if (!embedded) Text("AstraMatic", style = MaterialTheme.typography.headlineMedium)
+        Row(verticalAlignment = Alignment.Top) {
+            if (!embedded) Text("AstraMatic", style = MaterialTheme.typography.headlineMedium)
+            Spacer(Modifier.weight(1f))
+            // Сверить с `git log -1`: тот же хеш — на телефоне последняя версия.
+            Text(
+                "v${BuildConfig.VERSION_NAME} · ${BuildConfig.COMMIT}",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+            )
+        }
 
         if (settings.keepHistory && history.entries.isNotEmpty()) {
             Row(verticalAlignment = Alignment.CenterVertically) {
