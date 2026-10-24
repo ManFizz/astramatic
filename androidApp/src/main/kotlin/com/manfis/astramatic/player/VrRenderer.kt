@@ -39,6 +39,22 @@ class VrRenderer(
 
     @Volatile var panelVisible = false
 
+    /**
+     * Какую часть виртуального дисплея показывать и где.
+     * [visibleHeightPx] — сколько пикселей сверху дисплея видно, [width] — ширина в метрах,
+     * [centerY] — высота центра относительно глаз в метрах.
+     */
+    enum class PanelLayout(val visibleHeightPx: Int, val width: Float, val centerY: Float) {
+        Menu(PANEL_HEIGHT_PX, 2.2f, 0f),
+        /** Полоска управления: верхние 300 px (200 dp при плотности панели), чуть ниже взгляда. */
+        Controls(300, 1.8f, -0.55f);
+
+        val height: Float get() = width * visibleHeightPx / PANEL_WIDTH_PX
+        val visibleFraction: Float get() = visibleHeightPx.toFloat() / PANEL_HEIGHT_PX
+    }
+
+    @Volatile var panelLayout = PanelLayout.Menu
+
     /** Точка взгляда на панели в пикселях панели, null — взгляд мимо. Обновляется каждый кадр. */
     @Volatile var gaze: Gaze? = null
         private set
@@ -132,31 +148,32 @@ class VrRenderer(
         }
 
         updateVideoModel(format)
+        val layout = panelLayout
         Matrix.setRotateM(panelModel, 0, panelYawDeg, 0f, 1f, 0f)
-        Matrix.translateM(panelModel, 0, 0f, 0f, -PANEL_DISTANCE)
-        Matrix.scaleM(panelModel, 0, PANEL_WIDTH, PANEL_HEIGHT, 1f)
+        Matrix.translateM(panelModel, 0, 0f, layout.centerY, -PANEL_DISTANCE)
+        Matrix.scaleM(panelModel, 0, layout.width, layout.height, 1f)
 
-        gaze = if (panelVisible) computeGaze() else null
+        gaze = if (panelVisible) computeGaze(layout) else null
     }
 
     /** Пересечение луча взгляда с плоскостью панели, в координатах панели. */
-    private fun computeGaze(): Gaze? {
+    private fun computeGaze(layout: PanelLayout): Gaze? {
         Matrix.setRotateM(rotation, 0, -panelYawDeg, 0f, 1f, 0f)
         Matrix.multiplyMV(localDirection, 0, rotation, 0, direction, 0)
         val dz = localDirection[2]
         if (dz > -0.01f) return null
         val t = -PANEL_DISTANCE / dz
-        val u = localDirection[0] * t / PANEL_WIDTH + 0.5f
-        val v = 0.5f - localDirection[1] * t / PANEL_HEIGHT
+        val u = localDirection[0] * t / layout.width + 0.5f
+        val v = 0.5f - (localDirection[1] * t - layout.centerY) / layout.height
         if (u !in 0f..1f || v !in 0f..1f) return null
 
         Matrix.setRotateM(cursorModel, 0, panelYawDeg, 0f, 1f, 0f)
         Matrix.translateM(
             cursorModel, 0,
-            (u - 0.5f) * PANEL_WIDTH, (0.5f - v) * PANEL_HEIGHT, -PANEL_DISTANCE + CURSOR_LIFT,
+            (u - 0.5f) * layout.width, (0.5f - v) * layout.height + layout.centerY, -PANEL_DISTANCE + CURSOR_LIFT,
         )
         Matrix.scaleM(cursorModel, 0, CURSOR_SIZE, CURSOR_SIZE, 1f)
-        return Gaze(u * PANEL_WIDTH_PX, v * PANEL_HEIGHT_PX)
+        return Gaze(u * PANEL_WIDTH_PX, v * layout.visibleHeightPx)
     }
 
     override fun onDrawEye(eye: CardboardView.Eye) {
@@ -172,7 +189,11 @@ class VrRenderer(
             GLES20.glEnable(GLES20.GL_BLEND)
             // Кадры виртуального дисплея с премультиплицированной альфой (прозрачные углы панели).
             GLES20.glBlendFunc(GLES20.GL_ONE, GLES20.GL_ONE_MINUS_SRC_ALPHA)
-            drawTextured(panel, quad, eye, projection, panelModel)
+            // Верхняя часть кадра дисплея; v = 0 внизу текстуры.
+            val visible = panelLayout.visibleFraction
+            GLES20.glUseProgram(textureProgram)
+            GLES20.glUniform4f(uUvRect, 0f, 1f - visible, 1f, visible)
+            drawTextured(panel, quad, eye, projection, panelModel, setUvRect = false)
             if (gaze != null) {
                 GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
                 drawCursor(eye, projection)
@@ -308,8 +329,6 @@ class VrRenderer(
         const val PANEL_DENSITY_DPI = 240
 
         private const val PANEL_DISTANCE = 2.5f
-        private const val PANEL_WIDTH = 2.2f
-        private const val PANEL_HEIGHT = PANEL_WIDTH * PANEL_HEIGHT_PX / PANEL_WIDTH_PX
         private const val PLACE_PANEL_FRAMES = 45
         private const val CURSOR_SIZE = 0.04f
         private const val CURSOR_LIFT = 0.01f

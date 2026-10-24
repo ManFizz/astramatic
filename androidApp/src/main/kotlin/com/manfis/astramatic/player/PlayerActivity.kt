@@ -84,7 +84,7 @@ class PlayerActivity : ComponentActivity() {
 
             override fun onPlayerError(error: PlaybackException) {
                 Toast.makeText(this@PlayerActivity, "Ошибка воспроизведения: ${error.errorCodeName}", Toast.LENGTH_LONG).show()
-                showMenu()
+                showMenu(VrMenuState.Tab.Files)
             }
         })
 
@@ -102,7 +102,8 @@ class PlayerActivity : ComponentActivity() {
                 cardboardView.onDestroy()
             }
             setStereoRenderMode(stereoMode)
-            setOnBackButtonClick { onBackPressedDispatcher.onBackPressed() }
+            // Крестик SDK — выход из VR, как в других Cardboard-приложениях.
+            setOnBackButtonClick { finish() }
             setOnSettingsButtonClick { showMenu(VrMenuState.Tab.Headset) }
         }
         cardboardView.setOnTouchListener { _, event ->
@@ -143,9 +144,9 @@ class PlayerActivity : ComponentActivity() {
 
         onBackPressedDispatcher.addCallback(this) {
             when {
-                uiHost.place == VrUiHost.Place.Hidden -> showMenu()
-                menu.title != null -> hideMenu()
-                else -> finish()
+                menu.title == null -> finish()
+                uiHost.place == VrUiHost.Place.Hidden -> showControls()
+                else -> hideMenu()
             }
         }
 
@@ -178,7 +179,8 @@ class PlayerActivity : ComponentActivity() {
         override fun recenter() = renderer.recenter()
         override fun play(uri: Uri, name: String, format: VideoFormat) = openVideo(uri, name, format)
         override fun headsetSaved() = cardboardView.loadDeviceParams()
-        override fun closeMenu() = hideMenu()
+        override fun openMenu(tab: VrMenuState.Tab) = showMenu(tab)
+        override fun hide() = hideMenu()
         override fun exit() = finish()
     }
 
@@ -190,15 +192,30 @@ class PlayerActivity : ComponentActivity() {
         menuActions.setFormat(format)
         renderer.hasVideo = true
         renderer.recenter()
-        menu.tab = VrMenuState.Tab.Player
+        menu.tab = VrMenuState.Tab.Video
         hideMenu()
     }
 
     // --- Меню -------------------------------------------------------------------------------
 
+    /** Большое меню: видео, файлы, шлем. */
     private fun showMenu(tab: VrMenuState.Tab? = null) {
         if (tab != null) menu.tab = tab
+        showPanel(VrMenuState.Mode.Menu)
+    }
+
+    /** Полоска управления воспроизведением. Без видео управлять нечем — тогда меню. */
+    private fun showControls() {
+        if (menu.title == null) showMenu(VrMenuState.Tab.Files) else showPanel(VrMenuState.Mode.Controls)
+    }
+
+    private fun showPanel(mode: VrMenuState.Mode) {
+        menu.mode = mode
         if (stereoMode) {
+            renderer.panelLayout = when (mode) {
+                VrMenuState.Mode.Menu -> VrRenderer.PanelLayout.Menu
+                VrMenuState.Mode.Controls -> VrRenderer.PanelLayout.Controls
+            }
             renderer.placePanelInFront()
             renderer.panelVisible = true
             uiHost.showInVr()
@@ -274,7 +291,7 @@ class PlayerActivity : ComponentActivity() {
                     // Нажатие мимо панели закрывает меню, если есть что смотреть, иначе возвращает панель перед глаза.
                     uiHost.place == VrUiHost.Place.Vr -> if (menu.title != null) hideMenu() else renderer.placePanelInFront()
                     longPress -> renderer.recenter()
-                    else -> showMenu()
+                    else -> showControls()
                 }
             }
         }
@@ -304,8 +321,12 @@ class PlayerActivity : ComponentActivity() {
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         if (uiHost.place != VrUiHost.Place.Hidden) {
+            // Menu/Start: полоска → меню → скрыть.
             if (keyCode == KeyEvent.KEYCODE_MENU || keyCode == KeyEvent.KEYCODE_BUTTON_START) {
-                if (menu.title != null) hideMenu()
+                when {
+                    menu.mode == VrMenuState.Mode.Controls -> showMenu(VrMenuState.Tab.Video)
+                    menu.title != null -> hideMenu()
+                }
                 return true
             }
             return super.onKeyDown(keyCode, event)
@@ -331,7 +352,7 @@ class PlayerActivity : ComponentActivity() {
             KeyEvent.KEYCODE_DPAD_DOWN,
             KeyEvent.KEYCODE_MENU,
             KeyEvent.KEYCODE_BUTTON_START,
-            KeyEvent.KEYCODE_BUTTON_SELECT -> showMenu()
+            KeyEvent.KEYCODE_BUTTON_SELECT -> showControls()
             else -> return super.onKeyDown(keyCode, event)
         }
         return true
@@ -348,7 +369,7 @@ class PlayerActivity : ComponentActivity() {
                 renderer.panelVisible = false
                 handler.removeCallbacks(hoverTick)
             }
-            showMenu()
+            showPanel(menu.mode)
         }
         updateModeButton()
     }
