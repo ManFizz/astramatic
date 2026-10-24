@@ -60,6 +60,7 @@ class PlayerActivity : ComponentActivity() {
     private val handler = Handler(Looper.getMainLooper())
     private val settings by lazy { AppSettings.get(this) }
     private val positions by lazy { ResumePositions(this) }
+    private val formats by lazy { FormatMemory(this) }
     private var playlist: Playlist? = null
 
     private val prefs by lazy { getSharedPreferences("player", MODE_PRIVATE) }
@@ -105,6 +106,7 @@ class PlayerActivity : ComponentActivity() {
         })
 
         renderer = VrRenderer(
+            settings = settings,
             onVideoSurfaceReady = { surface -> runOnUiThread { player.setVideoSurface(surface) } },
             onPanelSurfaceReady = { surface -> runOnUiThread { uiHost.setSurface(surface) } },
         )
@@ -183,8 +185,15 @@ class PlayerActivity : ComponentActivity() {
         }
 
         override fun setFormat(format: VideoFormat) {
-            menu.format = format
-            renderer.format = format
+            applyFormat(format)
+            // Выбран вручную — запоминаем для этого файла.
+            playlist?.current?.let { formats.save(it.uri, format) }
+        }
+
+        override fun resetFormat() {
+            val item = playlist?.current ?: return
+            formats.clear(item.uri)
+            applyFormat(item.format)
         }
 
         override fun toggleStereo() = toggleStereoMode()
@@ -209,13 +218,18 @@ class PlayerActivity : ComponentActivity() {
         menu.title = item.title
         menu.hasPrevious = next.hasPrevious
         menu.hasNext = next.hasNext
-        menuActions.setFormat(item.format)
+        applyFormat(formats.get(item.uri) ?: item.format)
         handler.removeCallbacks(saveTick)
         handler.postDelayed(saveTick, SAVE_INTERVAL_MS)
         renderer.hasVideo = true
         renderer.recenter()
         menu.tab = VrMenuState.Tab.Video
         hideMenu()
+    }
+
+    private fun applyFormat(format: VideoFormat) {
+        menu.format = format
+        renderer.format = format
     }
 
     /** Позиция пишется всегда: включить «продолжать с места» можно и позже. */

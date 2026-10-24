@@ -26,6 +26,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
@@ -40,7 +41,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.manfis.astramatic.settings.AppSettings
+import kotlin.math.roundToInt
 import com.manfis.astramatic.headset.HeadsetScreen
 import com.manfis.astramatic.player.Playlist
 import com.manfis.astramatic.settings.RemoteAction
@@ -85,6 +89,9 @@ interface VrMenuActions {
     fun seekTo(positionMs: Long)
     fun seekBy(deltaMs: Long)
     fun setFormat(format: VideoFormat)
+
+    /** Забыть ручной выбор и вернуть формат, угаданный по имени файла. */
+    fun resetFormat()
     fun toggleStereo()
     fun recenter()
     fun play(playlist: Playlist)
@@ -273,21 +280,25 @@ private fun TabChip(state: VrMenuState, tab: VrMenuState.Tab, label: String) {
     FilterChip(selected = state.tab == tab, onClick = { state.tab = tab }, label = { Text(label) })
 }
 
-/** Настройки показа текущего видео. */
+/** Настройки показа текущего видео. Выбранное вручную запоминается для этого файла. */
 @Composable
 private fun VideoTab(state: VrMenuState, actions: VrMenuActions) {
+    val context = LocalContext.current
+    val settings = remember { AppSettings.get(context) }
+    val format = state.format
+
     Column(
         modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         Text(state.title ?: "", style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
 
         Text("Проекция", style = MaterialTheme.typography.titleMedium)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Projection.entries.forEach {
                 FilterChip(
-                    selected = state.format.projection == it,
-                    onClick = { actions.setFormat(state.format.copy(projection = it)) },
+                    selected = format.projection == it,
+                    onClick = { actions.setFormat(format.copy(projection = it)) },
                     label = { Text(projectionLabel(it)) },
                 )
             }
@@ -296,18 +307,84 @@ private fun VideoTab(state: VrMenuState, actions: VrMenuActions) {
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             StereoLayout.entries.forEach {
                 FilterChip(
-                    selected = state.format.stereo == it,
-                    onClick = { actions.setFormat(state.format.copy(stereo = it)) },
+                    selected = format.stereo == it,
+                    onClick = { actions.setFormat(format.copy(stereo = it)) },
                     label = { Text(stereoLabel(it)) },
                 )
             }
         }
+
+        if (format.projection == Projection.Dome180 || format.projection == Projection.Fisheye) {
+            LabeledSlider(
+                title = "Угол обзора видео: ${format.fovDeg}°",
+                hint = "Если картинка растянута или сжата по краям. Объективы fisheye бывают на 190–220°.",
+                value = format.fovDeg.toFloat(),
+                range = 120f..240f,
+                step = 5f,
+            ) { actions.setFormat(format.copy(fovDeg = it.roundToInt())) }
+        }
+        if (format.projection != Projection.Flat) {
+            LabeledSlider(
+                title = "Наклон: ${format.tiltDeg}°",
+                hint = "Если горизонт выше или ниже взгляда.",
+                value = format.tiltDeg.toFloat(),
+                range = -45f..45f,
+                step = 1f,
+            ) { actions.setFormat(format.copy(tiltDeg = it.roundToInt())) }
+        }
+        if (format.projection == Projection.Flat) {
+            Text("Экран кинотеатра", style = MaterialTheme.typography.titleMedium)
+            LabeledSlider(
+                title = "Высота экрана: ${"%.1f".format(settings.screenHeight)} м",
+                hint = null,
+                value = settings.screenHeight,
+                range = 0.5f..8f,
+                step = 0.1f,
+            ) { settings.screenHeight = it }
+            LabeledSlider(
+                title = "Расстояние: ${"%.1f".format(settings.screenDistance)} м",
+                hint = "Размер и расстояние — общие для всех плоских видео.",
+                value = settings.screenDistance,
+                range = 1f..12f,
+                step = 0.1f,
+            ) { settings.screenDistance = it }
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Подсветка комнаты", style = MaterialTheme.typography.bodyLarge)
+                    Text("Тёмный зал вокруг экрана мягко светится цветом кадра.", style = MaterialTheme.typography.bodySmall)
+                }
+                Switch(checked = settings.ambientLight, onCheckedChange = { settings.ambientLight = it })
+            }
+        }
+
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            OutlinedButton(onClick = actions::recenter) { Text("Рецентр") }
+            OutlinedButton(onClick = actions::resetFormat) { Text("Формат по имени файла") }
+        }
         Text(
-            "Формат угадывается по имени файла. Если картинка двоится или искажена — выберите здесь вручную.",
+            "Формат угадывается по имени файла. Выбранный здесь запоминается для этого видео.",
             style = MaterialTheme.typography.bodySmall,
         )
+    }
+}
 
-        OutlinedButton(onClick = actions::recenter) { Text("Рецентр — центр видео туда, куда смотрю") }
+@Composable
+private fun LabeledSlider(
+    title: String,
+    hint: String?,
+    value: Float,
+    range: ClosedFloatingPointRange<Float>,
+    step: Float,
+    onChange: (Float) -> Unit,
+) {
+    Column {
+        Text(title, style = MaterialTheme.typography.bodyLarge)
+        Slider(
+            value = value.coerceIn(range),
+            onValueChange = { onChange((it / step).roundToInt() * step) },
+            valueRange = range,
+        )
+        if (hint != null) Text(hint, style = MaterialTheme.typography.bodySmall)
     }
 }
 

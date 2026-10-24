@@ -23,6 +23,13 @@ class AppSettings private constructor(private val prefs: SharedPreferences) {
     var dwellClick by pref("dwell_click", false)
     var dwellMs by pref("dwell_ms", 1500)
 
+    /** Плоский экран: высота и расстояние в метрах. */
+    var screenHeight by pref("screen_height", 2f)
+    var screenDistance by pref("screen_distance", 3f)
+
+    /** Комната вокруг плоского экрана подсвечивается цветом кадра. */
+    var ambientLight by pref("ambient_light", false)
+
     val keys = KeyBindings(prefs)
 
     private fun <T> pref(key: String, default: T) = object : ReadWriteProperty<Any?, T> {

@@ -51,3 +51,14 @@ class ResumePositions(context: Context) {
         const val END_FRACTION = 0.95
     }
 }
+
+/** Формат, выбранный вручную для конкретного файла: важнее того, что угадано по имени. */
+class FormatMemory(context: Context) {
+    private val prefs = context.applicationContext.getSharedPreferences("formats", Context.MODE_PRIVATE)
+
+    fun get(uri: Uri): VideoFormat? = prefs.getString(uri.toString(), null)?.let(VideoFormat::decode)
+
+    fun save(uri: Uri, format: VideoFormat) = prefs.edit().putString(uri.toString(), format.encode()).apply()
+
+    fun clear(uri: Uri) = prefs.edit().remove(uri.toString()).apply()
+}

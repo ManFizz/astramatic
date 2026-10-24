@@ -474,6 +474,8 @@ fun projectionLabel(projection: Projection) = when (projection) {
     Projection.Flat -> "Плоское"
     Projection.Dome180 -> "180°"
     Projection.Sphere360 -> "360°"
+    Projection.Fisheye -> "Fisheye"
+    Projection.Eac360 -> "360° EAC"
 }
 
 fun stereoLabel(stereo: StereoLayout) = when (stereo) {

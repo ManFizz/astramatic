@@ -11,12 +11,18 @@ object VideoFormatDetector {
     private val sideBySide = setOf("lr", "rl", "sbs", "3dh", "hsbs", "fsbs", "180lr", "180sbs")
     private val topBottom = setOf("tb", "bt", "ou", "3dv", "htb", "hou", "overunder", "topbottom", "180tb")
     private val mono = setOf("mono", "2d", "360mono", "mono360")
+    private val fisheye = setOf("fisheye", "fisheye180", "fisheye190", "fisheye200", "f180", "mkx200", "mkx", "rf52")
+    private val eac = setOf("eac", "eac360", "cubemap")
+
+    private val fovTag = Regex("(?:fisheye|mkx)(1[6-9]0|2[0-4]0)")
 
     /** null, если в имени нет ни одного известного тега. */
     fun detect(fileName: String): VideoFormat? {
         val tokens = fileName.substringBeforeLast('.').lowercase().split(Regex("[^a-z0-9]+")).toSet()
 
         val projection = when {
+            tokens.any { it in eac } -> Projection.Eac360
+            tokens.any { it in fisheye } -> Projection.Fisheye
             tokens.any { it in sphere360 } -> Projection.Sphere360
             tokens.any { it in dome180 } -> Projection.Dome180
             else -> null
@@ -33,10 +39,12 @@ object VideoFormatDetector {
             // Только стерео-тег — это обычный 3D-фильм на плоском экране.
             projection = projection ?: Projection.Flat,
             stereo = stereo ?: when (projection) {
-                // VR180 почти всегда стерео, 360 — чаще моно.
-                Projection.Dome180 -> StereoLayout.SideBySide
+                // VR180 (и с объектива fisheye) почти всегда стерео, 360 — чаще моно.
+                Projection.Dome180, Projection.Fisheye -> StereoLayout.SideBySide
                 else -> StereoLayout.Mono
             },
+            // Объективы шире 180° пишут это в имени: fisheye190, mkx200.
+            fovDeg = tokens.firstNotNullOfOrNull { fovTag.matchEntire(it)?.groupValues?.get(1)?.toInt() } ?: 180,
         )
     }
 }

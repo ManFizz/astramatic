@@ -27,6 +27,20 @@ class VideoFormatDetectorTest {
     }
 
     @Test
+    fun fisheyeAndEac() {
+        assertEquals(VideoFormat(Projection.Fisheye, StereoLayout.SideBySide), detect("hike_FISHEYE_LR.mp4"))
+        assertEquals(VideoFormat(Projection.Fisheye, StereoLayout.SideBySide, fovDeg = 190), detect("cam_fisheye190.mp4"))
+        assertEquals(VideoFormat(Projection.Eac360, StereoLayout.Mono), detect("yt_360_eac.mp4"))
+    }
+
+    @Test
+    fun formatSurvivesStorage() {
+        val format = VideoFormat(Projection.Fisheye, StereoLayout.TopBottom, fovDeg = 200, tiltDeg = -7)
+        assertEquals(format, VideoFormat.decode(format.encode()))
+        assertNull(VideoFormat.decode("garbage"))
+    }
+
+    @Test
     fun noTags() {
         assertNull(detect("holiday.mp4"))
         // Число в названии — не тег проекции.

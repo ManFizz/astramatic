@@ -11,6 +11,7 @@ import com.google.cardboard.sdk.Viewport
 import com.manfis.astramatic.model.Projection
 import com.manfis.astramatic.model.StereoLayout
 import com.manfis.astramatic.model.VideoFormat
+import com.manfis.astramatic.settings.AppSettings
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import javax.microedition.khronos.egl.EGLConfig
@@ -24,6 +25,8 @@ import kotlin.math.atan2
  * CardboardView создаёт контекст OpenGL ES 2.0, поэтому шейдеры на GLSL ES 1.00.
  */
 class VrRenderer(
+    /** Размер и расстояние плоского экрана, подсветка: читаются каждый кадр, меняются на лету. */
+    private val settings: AppSettings,
     /** Вызывается на GL-потоке, когда готова поверхность для декодера (в том числе после пересоздания контекста). */
     private val onVideoSurfaceReady: (Surface) -> Unit,
     /** То же для панели интерфейса: в эту поверхность рисует виртуальный дисплей. */
@@ -65,12 +68,26 @@ class VrRenderer(
     /** Заполнение кольца вокруг курсора при нажатии взглядом, 0..1. */
     @Volatile var dwellProgress = 0f
 
-    private val meshes = mapOf(
-        Projection.Flat to Meshes.quad(),
-        Projection.Dome180 to Meshes.sphere(SPHERE_RADIUS, PI.toFloat()),
-        Projection.Sphere360 to Meshes.sphere(SPHERE_RADIUS, 2 * PI.toFloat()),
-    )
+    /** Геометрия зависит от проекции и угла: строится один раз на сочетание (только на GL-потоке). */
+    private val meshes = HashMap<Pair<Projection, Int>, Mesh>()
     private val quad = Meshes.quad()
+    private val room = Meshes.sphere(ROOM_RADIUS, 2 * PI.toFloat(), latSegments = 24, lonSegments = 48)
+
+    private fun meshFor(format: VideoFormat): Mesh {
+        val fov = when (format.projection) {
+            Projection.Dome180, Projection.Fisheye -> format.fovDeg
+            else -> 0
+        }
+        return meshes.getOrPut(format.projection to fov) {
+            when (format.projection) {
+                Projection.Flat -> Meshes.quad()
+                Projection.Dome180 -> Meshes.sphere(SPHERE_RADIUS, Math.toRadians(fov.toDouble()).toFloat())
+                Projection.Sphere360 -> Meshes.sphere(SPHERE_RADIUS, 2 * PI.toFloat())
+                Projection.Fisheye -> Meshes.fisheye(SPHERE_RADIUS, fov)
+                Projection.Eac360 -> Meshes.eac(SPHERE_RADIUS)
+            }
+        }
+    }
 
     private val video = ExternalTexture()
     private val panel = ExternalTexture()
@@ -87,6 +104,13 @@ class VrRenderer(
     private var cursorUv = 0
     private var cursorMvp = 0
     private var cursorProgress = 0
+
+    private var roomProgram = 0
+    private var roomPosition = 0
+    private var roomMvp = 0
+    private var roomUvRect = 0
+    private var roomTexMatrix = 0
+    private val roomModel = FloatArray(16)
 
     private val recenterRequested = AtomicBoolean(true)
     /**
@@ -127,6 +151,12 @@ class VrRenderer(
         cursorUv = GLES20.glGetAttribLocation(cursorProgram, "aUv")
         cursorMvp = GLES20.glGetUniformLocation(cursorProgram, "uMvp")
         cursorProgress = GLES20.glGetUniformLocation(cursorProgram, "uProgress")
+
+        roomProgram = GlUtil.program(ROOM_VERTEX_SHADER, ROOM_FRAGMENT_SHADER)
+        roomPosition = GLES20.glGetAttribLocation(roomProgram, "aPosition")
+        roomMvp = GLES20.glGetUniformLocation(roomProgram, "uMvp")
+        roomUvRect = GLES20.glGetUniformLocation(roomProgram, "uUvRect")
+        roomTexMatrix = GLES20.glGetUniformLocation(roomProgram, "uTexMatrix")
 
         onVideoSurfaceReady(video.create())
         onPanelSurfaceReady(panel.create(PANEL_WIDTH_PX, PANEL_HEIGHT_PX))
@@ -222,15 +252,37 @@ class VrRenderer(
     private fun drawVideo(eye: CardboardView.Eye, projection: FloatArray) {
         if (!video.isReady) return
         val format = format
-        val rightEye = eye.eyeType == CardboardView.Eye.RIGHT
+        val rect = eyeRect(format.stereo, eye.eyeType == CardboardView.Eye.RIGHT)
+        if (format.projection == Projection.Flat && settings.ambientLight) drawRoom(eye, projection, rect)
         GLES20.glUseProgram(textureProgram)
-        when (format.stereo) {
-            StereoLayout.Mono -> GLES20.glUniform4f(uUvRect, 0f, 0f, 1f, 1f)
-            StereoLayout.SideBySide -> GLES20.glUniform4f(uUvRect, if (rightEye) 0.5f else 0f, 0f, 0.5f, 1f)
-            // Левый глаз сверху; v = 0 внизу кадра.
-            StereoLayout.TopBottom -> GLES20.glUniform4f(uUvRect, 0f, if (rightEye) 0f else 0.5f, 1f, 0.5f)
-        }
-        drawTextured(video, meshes.getValue(format.projection), eye, projection, videoModel, setUvRect = false)
+        GLES20.glUniform4f(uUvRect, rect[0], rect[1], rect[2], rect[3])
+        drawTextured(video, meshFor(format), eye, projection, videoModel, setUvRect = false)
+    }
+
+    /** Часть кадра для глаза: смещение и размер по u и v. Левый глаз сверху; v = 0 внизу кадра. */
+    private fun eyeRect(stereo: StereoLayout, rightEye: Boolean): FloatArray = when (stereo) {
+        StereoLayout.Mono -> floatArrayOf(0f, 0f, 1f, 1f)
+        StereoLayout.SideBySide -> floatArrayOf(if (rightEye) 0.5f else 0f, 0f, 0.5f, 1f)
+        StereoLayout.TopBottom -> floatArrayOf(0f, if (rightEye) 0f else 0.5f, 1f, 0.5f)
+    }
+
+    /** Тёмная комната вокруг плоского экрана, подсвеченная средним цветом кадра — сильнее со стороны экрана. */
+    private fun drawRoom(eye: CardboardView.Eye, projection: FloatArray, rect: FloatArray) {
+        Matrix.setRotateM(roomModel, 0, videoYawDeg, 0f, 1f, 0f)
+        Matrix.multiplyMM(viewModel, 0, eye.eyeView, 0, roomModel, 0)
+        Matrix.multiplyMM(mvp, 0, projection, 0, viewModel, 0)
+        GLES20.glUseProgram(roomProgram)
+        GLES20.glUniformMatrix4fv(roomMvp, 1, false, mvp, 0)
+        GLES20.glUniformMatrix4fv(roomTexMatrix, 1, false, video.transform, 0)
+        GLES20.glUniform4f(roomUvRect, rect[0], rect[1], rect[2], rect[3])
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, video.id)
+        val vertices = room.vertices
+        vertices.position(0)
+        GLES20.glVertexAttribPointer(roomPosition, 3, GLES20.GL_FLOAT, false, Mesh.STRIDE_BYTES, vertices)
+        GLES20.glEnableVertexAttribArray(roomPosition)
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, room.vertexCount)
+        GLES20.glDisableVertexAttribArray(roomPosition)
     }
 
     private fun drawTextured(
@@ -283,14 +335,16 @@ class VrRenderer(
 
     private fun updateVideoModel(format: VideoFormat) {
         Matrix.setRotateM(videoModel, 0, videoYawDeg, 0f, 1f, 0f)
+        if (format.tiltDeg != 0) Matrix.rotateM(videoModel, 0, format.tiltDeg.toFloat(), 1f, 0f, 0f)
         if (format.projection != Projection.Flat) return
         val eyeAspect = when (format.stereo) {
             StereoLayout.Mono -> videoAspect
             StereoLayout.SideBySide -> videoAspect / 2
             StereoLayout.TopBottom -> videoAspect * 2
         }
-        Matrix.translateM(videoModel, 0, 0f, 0f, -FLAT_SCREEN_DISTANCE)
-        Matrix.scaleM(videoModel, 0, FLAT_SCREEN_HEIGHT * eyeAspect, FLAT_SCREEN_HEIGHT, 1f)
+        val height = settings.screenHeight
+        Matrix.translateM(videoModel, 0, 0f, 0f, -settings.screenDistance)
+        Matrix.scaleM(videoModel, 0, height * eyeAspect, height, 1f)
     }
 
     fun release() {
@@ -357,8 +411,37 @@ class VrRenderer(
         private const val Z_NEAR = 0.1f
         private const val Z_FAR = 100f
         private const val SPHERE_RADIUS = 10f
-        private const val FLAT_SCREEN_DISTANCE = 3f
-        private const val FLAT_SCREEN_HEIGHT = 2f
+        private const val ROOM_RADIUS = 30f
+
+        private const val ROOM_VERTEX_SHADER = """
+uniform mat4 uMvp;
+attribute vec3 aPosition;
+varying vec3 vDir;
+void main() {
+    vDir = normalize(aPosition);
+    gl_Position = uMvp * vec4(aPosition, 1.0);
+}
+"""
+
+        // Средний цвет кадра по сетке 4×4 точек; ярче всего прямо за экраном, к спине — почти темнота.
+        private const val ROOM_FRAGMENT_SHADER = """#extension GL_OES_EGL_image_external : require
+precision mediump float;
+uniform samplerExternalOES uTexture;
+uniform mat4 uTexMatrix;
+uniform vec4 uUvRect;
+varying vec3 vDir;
+void main() {
+    vec3 sum = vec3(0.0);
+    for (int x = 0; x < 4; x++) {
+        for (int y = 0; y < 4; y++) {
+            vec2 uv = uUvRect.xy + (vec2(float(x), float(y)) + 0.5) / 4.0 * uUvRect.zw;
+            sum += texture2D(uTexture, (uTexMatrix * vec4(uv, 0.0, 1.0)).xy).rgb;
+        }
+    }
+    float front = max(0.0, -vDir.z);
+    gl_FragColor = vec4(sum / 16.0 * (0.04 + 0.32 * front * front), 1.0);
+}
+"""
 
         private const val TEXTURE_VERTEX_SHADER = """
 uniform mat4 uMvp;
