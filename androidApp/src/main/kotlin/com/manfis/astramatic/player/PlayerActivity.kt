@@ -43,6 +43,7 @@ import com.manfis.astramatic.ui.MIN_ZOOM
 import android.graphics.Bitmap
 import android.view.Surface
 import androidx.lifecycle.lifecycleScope
+import androidx.compose.runtime.snapshotFlow
 import coil3.SingletonImageLoader
 import coil3.request.ImageRequest
 import coil3.request.SuccessResult
@@ -216,6 +217,13 @@ class PlayerActivity : ComponentActivity() {
 
         // «Назад» закрывает меню и полоску, но не выходит из VR: выход — только крестиком, пальцем.
         // В 2D без видео и с открытыми файлами «Назад» выходит, как в обычном приложении.
+        lifecycleScope.launch {
+            snapshotFlow { menu.capturingKey }.collect {
+                captureStartedAt = SystemClock.uptimeMillis()
+                captureBaseline = null
+            }
+        }
+
         onBackPressedDispatcher.addCallback(this) {
             when {
                 uiHost.place == VrUiHost.Place.Hidden -> showControls()
@@ -773,6 +781,9 @@ class PlayerActivity : ComponentActivity() {
     /** Положение покоя на момент начала назначения: снимок до первого движения. */
     private var captureBaseline: Map<Int, Float>? = null
 
+    /** Когда началось назначение (uptime, мс). */
+    private var captureStartedAt = 0L
+
     /** Оси, нажатые как кнопки; только что назначенные не срабатывают, пока их не отпустят. */
     private val axisPressed = HashSet<AxisBinding>()
     private val axisSuppressed = HashSet<AxisBinding>()
@@ -802,6 +813,13 @@ class PlayerActivity : ComponentActivity() {
 
         val capturing = menu.capturingKey
         if (capturing != null) {
+            // Курок или стик, которым только что нажали «+», ещё возвращается в покой — это не назначение:
+            // первые мгновения просто запоминаем, где оси остановились.
+            if (event.eventTime - captureStartedAt < CAPTURE_SETTLE_MS) {
+                axisValues.putAll(values)
+                captureBaseline = values
+                return true
+            }
             val baseline = captureBaseline ?: rest.also { captureBaseline = it }
             axisValues.putAll(values)
             val moved = values.maxByOrNull { abs(it.value - (baseline[it.key] ?: 0f)) } ?: return true
@@ -987,6 +1005,7 @@ class PlayerActivity : ComponentActivity() {
         private const val DEAD_ZONE = 0.2f
         private const val NAV_THRESHOLD = 0.6f
         private const val CAPTURE_THRESHOLD = 0.6f
+        private const val CAPTURE_SETTLE_MS = 400L
         private const val AXIS_PRESS = 0.6f
         private const val AXIS_RELEASE = 0.3f
         private const val AXIS_TICK_MS = 50L
