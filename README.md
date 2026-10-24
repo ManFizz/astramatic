@@ -1,30 +1,30 @@
-This is a Kotlin Multiplatform project targeting Android, Desktop (JVM).
+# AstraMatic
 
-* [/shared](./shared/src) is for code that will be shared across your Compose Multiplatform applications.
-  It contains several subfolders:
-  - [commonMain](./shared/src/commonMain/kotlin) is for code that’s common for all targets.
-  - Other folders are for Kotlin code that will be compiled for only the platform indicated in the folder name.
-    For example, if you want to use Apple’s CoreCrypto for the iOS part of your Kotlin app,
-    the [iosMain](./shared/src/iosMain/kotlin) folder would be the right place for such calls.
-    Similarly, if you want to edit the Desktop (JVM) specific part, the [jvmMain](./shared/src/jvmMain/kotlin)
-    folder is the appropriate location.
+VR-плеер для Cardboard на Android и приложение-компаньон для ПК.
 
-### Running the apps
+- `androidApp` — плеер: видео с телефона, общих папок Windows (SMB), AstraMatic на ПК и Darkframe;
+  интерфейс внутри VR, пульты и геймпады, режим 2D.
+- `desktopApp` — AstraMatic для ПК: раздаёт папки с видео телефону, пульт, обзор Darkframe.
+- `shared` — общее: форматы видео, протокол телефон ⇄ ПК.
+- `third_party/cardboard` — исходники Cardboard SDK; приложение берёт готовый `androidApp/libs/cardboard-sdk.aar`.
 
-Use the run configurations provided by the run widget in your IDE's toolbar. You can also use these commands and options:
+## Сборка
 
-- Android app: `./gradlew :androidApp:assembleDebug`
-- Desktop app:
-  - Hot reload: `./gradlew :desktopApp:hotRun --auto`
-  - Standard run: `./gradlew :desktopApp:run`
+| Что | Команда | Результат |
+|---|---|---|
+| Телефон, для разработки | ▶ Run в Android Studio или `gradlew :androidApp:assembleDebug` | «AstraMatic Dev», id `com.manfis.astramatic.debug` |
+| Телефон, для себя | `gradlew :androidApp:assembleRelease` | «AstraMatic», `androidApp/build/outputs/apk/release/androidApp-release.apk` |
+| ПК, запустить | `gradlew :desktopApp:run` | окно AstraMatic |
+| ПК, установщик | `gradlew :desktopApp:packageMsi` | `.msi` в `desktopApp/build/compose/binaries` |
+| Cardboard SDK из исходников | `gradlew -Pastramatic.buildCardboard=true :cardboard:publishAar` | обновлённый `cardboard-sdk.aar` |
 
-### Running tests
+Отладочная и release-версии ставятся на телефон рядом, настройки у каждой свои.
 
-Use the run button in your IDE's editor gutter, or run tests using Gradle tasks:
+Release подписывается ключом из `%USERPROFILE%\.android-keys\` (`astramatic-release.jks` и
+`astramatic.properties` с паролем). Их нет в репозитории — **сохраните копию**: без этого ключа
+обновить установленную release-версию не получится, только удалить и поставить заново.
+Если файлов нет, release соберётся без подписи.
 
-- Android tests: `./gradlew :shared:testAndroidHostTest`
-- Desktop tests: `./gradlew :shared:jvmTest`
+## Настройки на ПК
 
----
-
-Learn more about [Kotlin Multiplatform](https://www.jetbrains.com/help/kotlin-multiplatform-dev/get-started.html)…
+`%USERPROFILE%\.astramatic\desktop.json` — папки, ключ подключения телефонов, доступ к Darkframe.

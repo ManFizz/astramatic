@@ -1,21 +1,17 @@
-# Add project specific ProGuard rules here.
-# You can control the set of applied configuration files using the
-# proguardFiles setting in build.gradle.
-#
-# For more details, see
-#   http://developer.android.com/guide/developing/tools/proguard.html
+# SMB (smbj): события рассылаются через mbassador, обработчики ищутся рефлексией по аннотациям.
+-keep class com.hierynomus.** { *; }
+-keep class net.engio.mbassy.** { *; }
+-keepattributes *Annotation*, Signature, InnerClasses, EnclosingMethod
 
-# If your project uses WebView with JS, uncomment the following
-# and specify the fully qualified class name to the JavaScript interface
-# class:
-#-keepclassmembers class fqcn.of.javascript.interface.for.webview {
-#   public *;
-#}
+# BouncyCastle — MD4 для входа по NTLM; алгоритмы находятся по именам классов.
+-keep class org.bouncycastle.** { *; }
 
-# Uncomment this to preserve the line number information for
-# debugging stack traces.
-#-keepattributes SourceFile,LineNumberTable
-
-# If you keep the line number information, uncomment this to
-# hide the original source file name.
-#-renamesourcefileattribute SourceFile
+# Классы, которых нет на Android, — ими эти библиотеки пользуются только на обычной JVM.
+-dontwarn org.bouncycastle.**
+-dontwarn com.hierynomus.**
+-dontwarn net.engio.mbassy.**
+-dontwarn org.slf4j.**
+-dontwarn javax.naming.**
+-dontwarn javax.el.**
+-dontwarn javax.security.auth.**
+-dontwarn org.ietf.jgss.**

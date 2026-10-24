@@ -1,4 +1,5 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.util.Properties
 
 plugins {
     alias(libs.plugins.androidApplication)
@@ -54,9 +55,30 @@ android {
             excludes += "/META-INF/{AL2.0,LGPL2.1}"
         }
     }
+    // Ключ подписи release — вне репозитория. Нет файла — release соберётся без подписи, debug не затронут.
+    val releaseKey = File(System.getProperty("user.home"), ".android-keys/astramatic.properties")
+    signingConfigs {
+        if (releaseKey.exists()) {
+            create("release") {
+                val props = Properties().apply { releaseKey.inputStream().use(::load) }
+                storeFile = file(props.getProperty("storeFile"))
+                storePassword = props.getProperty("storePassword")
+                keyAlias = props.getProperty("keyAlias")
+                keyPassword = props.getProperty("keyPassword")
+            }
+        }
+    }
     buildTypes {
+        debug {
+            // Отладочная версия ставится рядом с release, со своими настройками.
+            applicationIdSuffix = ".debug"
+            manifestPlaceholders["appLabel"] = "AstraMatic Dev"
+        }
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            signingConfig = signingConfigs.findByName("release")
+            manifestPlaceholders["appLabel"] = "AstraMatic"
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
