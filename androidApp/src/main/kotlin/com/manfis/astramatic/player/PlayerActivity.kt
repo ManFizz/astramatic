@@ -48,6 +48,8 @@ import java.util.concurrent.Executors
 import android.os.Build
 import com.manfis.astramatic.library.DesktopClient
 import com.manfis.astramatic.library.DesktopServer
+import com.manfis.astramatic.library.MediaLibrary
+import com.manfis.astramatic.library.MediaSourceRef
 import com.manfis.astramatic.model.VideoFormatDetector
 import com.manfis.astramatic.remote.PlayerStatus
 import com.manfis.astramatic.remote.RemoteCommand
@@ -310,6 +312,33 @@ class PlayerActivity : ComponentActivity() {
             RemoteCommand.ToggleStereo -> toggleStereoMode()
             is RemoteCommand.SetFormat -> VideoFormat.decode(command.format)?.let(menuActions::setFormat)
             is RemoteCommand.Open -> openFromDesktop(server, command)
+            is RemoteCommand.OpenDarkframe -> openFromDarkframe(server, command)
+        }
+    }
+
+    /**
+     * Видео из Darkframe, выбранное в окне ПК. Телефон открывает его через своё подключение к Darkframe —
+     * того, что работает на том же компьютере (или единственного).
+     */
+    private fun openFromDarkframe(desktop: DesktopServer, command: RemoteCommand.OpenDarkframe) {
+        val all = darkframes.all()
+        val host = Uri.parse(desktop.baseUrl).host
+        val server = all.find { Uri.parse(it.baseUrl).host == host } ?: all.singleOrNull()
+        if (server == null) {
+            Toast.makeText(this, "Подключите телефон к Darkframe: «+ Darkframe» на главном экране", Toast.LENGTH_LONG).show()
+            return
+        }
+        val fallback = DefaultFormat.load(this)
+        val library = MediaLibrary(this)
+        io.execute {
+            val videos = runCatching {
+                kotlinx.coroutines.runBlocking { library.list(MediaSourceRef.Darkframe(server.id), command.collection) }
+            }.getOrNull()?.filter { !it.isDirectory && it.playUri != null } ?: return@execute
+            val index = videos.indexOfFirst { it.path == command.itemId }.takeIf { it >= 0 } ?: return@execute
+            val items = videos.map {
+                PlaylistItem(it.playUri!!, it.name, VideoFormatDetector.detect(it.formatHint) ?: fallback, it.darkframe)
+            }
+            runOnUiThread { openPlaylist(Playlist(items, index)) }
         }
     }
 

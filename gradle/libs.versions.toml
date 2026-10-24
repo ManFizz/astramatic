@@ -27,6 +27,8 @@ coil = "3.6.3"
 ktor = "3.6.0"
 kotlinx-serialization = "1.11.0"
 zxing = "3.5.4"
+filekit = "0.16.0"
+materialIcons = "1.7.3"
 codeScanner = "16.1.0"
 
 [libraries]
@@ -59,6 +61,8 @@ ktor-server-cio = { module = "io.ktor:ktor-server-cio", version.ref = "ktor" }
 ktor-server-websockets = { module = "io.ktor:ktor-server-websockets", version.ref = "ktor" }
 ktor-server-partialContent = { module = "io.ktor:ktor-server-partial-content", version.ref = "ktor" }
 ktor-server-autoHead = { module = "io.ktor:ktor-server-auto-head-response", version.ref = "ktor" }
+filekit-dialogs = { module = "io.github.vinceglb:filekit-dialogs", version.ref = "filekit" }
+compose-materialIconsExtended = { module = "org.jetbrains.compose.material:material-icons-extended", version.ref = "materialIcons" }
 zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
 coil-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil" }
 coil-network = { module = "io.coil-kt.coil3:coil-network-okhttp", version.ref = "coil" }

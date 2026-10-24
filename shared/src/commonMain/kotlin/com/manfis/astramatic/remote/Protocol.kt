@@ -7,7 +7,7 @@ import kotlinx.serialization.json.Json
 /**
  * Телефон ⇄ AstraMatic на ПК.
  *
- * HTTP (заголовок `Authorization: Bearer <ключ>` из QR-кода):
+ * HTTP (заголовок `Authorization: Bearer <ключ>` из QR-кода, телефон называет себя в `X-Astra-Device`):
  *   GET /api/info                        → [ServerInfo]
  *   GET /api/list?folder=<id>&path=<…>   → список [FolderEntry]
  *   GET /file/<папка>/<путь>             → файл, с Range
@@ -16,6 +16,7 @@ import kotlinx.serialization.json.Json
  */
 object RemoteApi {
     const val DEFAULT_PORT = 47860
+    const val DEVICE_HEADER = "X-Astra-Device"
 
     val json = Json {
         ignoreUnknownKeys = true
@@ -60,6 +61,12 @@ sealed interface RemoteCommand {
 
     /** Открыть на телефоне видео из общей папки ПК (вместе с остальными видео этой папки). */
     @Serializable @SerialName("open") data class Open(val folderId: String, val path: String) : RemoteCommand
+
+    /**
+     * Открыть на телефоне видео из Darkframe этого ПК (вместе с остальными видео той же коллекции).
+     * [collection] — путь коллекции как у телефона: `c:<id>`, `s:<id>` (умная) или `none`.
+     */
+    @Serializable @SerialName("openDarkframe") data class OpenDarkframe(val collection: String, val itemId: String) : RemoteCommand
 }
 
 object VideoFiles {

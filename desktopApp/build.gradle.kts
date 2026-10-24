@@ -21,6 +21,8 @@ dependencies {
     implementation(libs.ktor.server.partialContent)
     implementation(libs.ktor.server.autoHead)
     implementation(libs.zxing.core)
+    implementation(libs.filekit.dialogs)
+    implementation(libs.compose.materialIconsExtended)
 }
 
 compose.desktop {

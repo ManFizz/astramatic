@@ -9,16 +9,20 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
-import com.manfis.astramatic.desktop.ConfigStore
+import com.manfis.astramatic.desktop.ConfigHolder
 import com.manfis.astramatic.desktop.DesktopApp
 import com.manfis.astramatic.desktop.MediaServer
 import com.manfis.astramatic.desktop.RemoteHub
 import com.manfis.astramatic.remote.RemoteCommand
+import io.github.vinceglb.filekit.FileKit
 
 fun main() {
-    var config = ConfigStore.load()
+    // Системные окна выбора файлов и папок.
+    FileKit.init(appId = "AstraMatic")
+
+    val holder = ConfigHolder()
     val hub = RemoteHub()
-    val server = MediaServer({ config }, hub).apply { start() }
+    val server = MediaServer(holder, hub).apply { start() }
 
     application {
         Window(
@@ -27,7 +31,7 @@ fun main() {
                 exitApplication()
             },
             title = "AstraMatic",
-            state = rememberWindowState(width = 1100.dp, height = 760.dp),
+            state = rememberWindowState(width = 1180.dp, height = 800.dp),
             // Клавиши пульта работают, когда окно в фокусе.
             onKeyEvent = { event ->
                 if (event.type != KeyEventType.KeyDown) return@Window false
@@ -46,17 +50,7 @@ fun main() {
                 true
             },
         ) {
-            DesktopApp(
-                initialConfig = config,
-                onConfigChange = {
-                    val restart = it.port != config.port
-                    config = it
-                    ConfigStore.save(it)
-                    if (restart) server.start()
-                },
-                server = server,
-                hub = hub,
-            )
+            DesktopApp(holder, server, hub)
         }
     }
 }

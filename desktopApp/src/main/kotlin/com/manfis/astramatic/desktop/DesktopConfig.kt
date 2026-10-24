@@ -3,6 +3,8 @@ package com.manfis.astramatic.desktop
 import com.manfis.astramatic.remote.FolderEntry
 import com.manfis.astramatic.remote.RemoteApi
 import com.manfis.astramatic.remote.VideoFiles
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.Serializable
 import java.io.File
 import java.net.Inet4Address
@@ -15,17 +17,42 @@ import java.util.UUID
 @Serializable
 data class FolderConfig(val id: String = UUID.randomUUID().toString(), val name: String, val path: String)
 
+/** Телефон, который уже подключался по ключу. */
+@Serializable
+data class KnownDevice(val name: String, val lastSeen: Long)
+
+/** Доступ к Darkframe как у телефона: ссылка «Подключить устройство» → токен устройства. */
+@Serializable
+data class DarkframeLink(val baseUrl: String, val token: String)
+
 @Serializable
 data class DesktopConfig(
     val port: Int = RemoteApi.DEFAULT_PORT,
     /** Секрет из QR-кода: без него сервер ничего не отдаёт. */
     val key: String = newKey(),
     val folders: List<FolderConfig> = emptyList(),
+    val devices: List<KnownDevice> = emptyList(),
+    val darkframe: DarkframeLink? = null,
 )
 
 fun newKey(): String {
     val bytes = ByteArray(24).also { SecureRandom().nextBytes(it) }
     return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
+}
+
+/** Текущие настройки: их читают сервер и окно, любое изменение сразу пишется на диск. */
+class ConfigHolder {
+    private val state = MutableStateFlow(ConfigStore.load())
+    val flow: StateFlow<DesktopConfig> = state
+    val value: DesktopConfig get() = state.value
+
+    @Synchronized
+    fun update(change: (DesktopConfig) -> DesktopConfig) {
+        val new = change(state.value)
+        if (new == state.value) return
+        state.value = new
+        ConfigStore.save(new)
+    }
 }
 
 /** `%USERPROFILE%/.astramatic/desktop.json`. */

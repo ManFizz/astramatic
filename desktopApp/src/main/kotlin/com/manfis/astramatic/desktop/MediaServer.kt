@@ -72,7 +72,9 @@ class RemoteHub {
 }
 
 /** HTTP-сервер для телефона: список общих папок, файлы с перемоткой, канал пульта. */
-class MediaServer(private val config: () -> DesktopConfig, private val hub: RemoteHub) {
+class MediaServer(private val holder: ConfigHolder, private val hub: RemoteHub) {
+    private fun config() = holder.value
+
     private var engine: EmbeddedServer<*, *>? = null
 
     /** null — работает; иначе почему не запустился. */
@@ -152,7 +154,16 @@ class MediaServer(private val config: () -> DesktopConfig, private val hub: Remo
     private suspend fun ApplicationCall.authorized(respond: Boolean = true): Boolean {
         val ok = request.headers["Authorization"] == "Bearer ${config().key}"
         if (!ok && respond) respond(HttpStatusCode.Unauthorized, "Нет доступа: подключите телефон по QR-коду заново")
+        if (ok) request.headers[RemoteApi.DEVICE_HEADER]?.let(::seen)
         return ok
+    }
+
+    /** Запоминаем телефоны, чтобы не показывать QR-код тем, кто уже подключён. Пишем на диск не чаще раза в минуту. */
+    private fun seen(name: String) {
+        val now = System.currentTimeMillis() / 1000
+        val known = config().devices.find { it.name == name }
+        if (known != null && now - known.lastSeen < 60) return
+        holder.update { c -> c.copy(devices = c.devices.filterNot { it.name == name } + KnownDevice(name, now)) }
     }
 
     private suspend fun ApplicationCall.respondJson(text: String) = respondText(text, ContentType.Application.Json)

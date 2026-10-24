@@ -1,6 +1,7 @@
 package com.manfis.astramatic.player
 
 import android.content.Context
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import com.manfis.astramatic.library.DesktopServer
@@ -48,6 +49,7 @@ class RemoteLink(
         val request = Request.Builder()
             .url(server.webSocketUrl)
             .header("Authorization", "Bearer ${server.key}")
+            .header(RemoteApi.DEVICE_HEADER, Build.MODEL)
             .build()
         sockets[server.id] = client.newWebSocket(request, object : WebSocketListener() {
             override fun onMessage(webSocket: WebSocket, text: String) {

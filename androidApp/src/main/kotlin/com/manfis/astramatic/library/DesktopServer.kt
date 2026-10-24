@@ -2,6 +2,7 @@ package com.manfis.astramatic.library
 
 import android.content.Context
 import android.net.Uri
+import android.os.Build
 import com.manfis.astramatic.remote.FolderEntry
 import com.manfis.astramatic.remote.RemoteApi
 import com.manfis.astramatic.remote.ServerInfo
@@ -85,6 +86,8 @@ object DesktopClient {
             connectTimeout = TIMEOUT_MS
             readTimeout = TIMEOUT_MS
             setRequestProperty("Authorization", "Bearer ${server.key}")
+            // ПК показывает список подключённых телефонов по этому имени.
+            setRequestProperty(RemoteApi.DEVICE_HEADER, Build.MODEL)
         }
         try {
             when (connection.responseCode) {
