@@ -131,7 +131,8 @@ fun RemoteScreen(state: VrMenuState) {
             OutlinedButton(onClick = { bindings.clearAll() }) { Text("Очистить всё") }
         }
         Text(
-            "Не назначенные стрелки и OK по-прежнему ходят по меню, «Назад» системы закрывает его. " +
+            "Если ось работает в обратную сторону — нажмите на неё (⇅), ✕ рядом убирает назначение. " +
+                "Не назначенные стрелки и OK по-прежнему ходят по меню, «Назад» системы закрывает его. " +
                 "Колесо мыши (пульты в режиме мыши) прокручивает меню.",
             style = MaterialTheme.typography.bodySmall,
         )
@@ -157,13 +158,15 @@ private fun BindingRow(action: RemoteAction, bindings: KeyBindings, onAdd: () ->
                             trailingIcon = { Text("✕") },
                         )
                     }
+                    // У оси два действия: развернуть направление и убрать.
                     axes.forEach { axis ->
                         InputChip(
-                            selected = false,
-                            onClick = { bindings.removeAxis(action, axis) },
+                            selected = axis.inverted,
+                            onClick = { bindings.invertAxis(action, axis) },
                             label = { Text(axis.title) },
-                            trailingIcon = { Text("✕") },
+                            leadingIcon = { Text("⇅") },
                         )
+                        TextButton(onClick = { bindings.removeAxis(action, axis) }) { Text("✕") }
                     }
                 }
             }

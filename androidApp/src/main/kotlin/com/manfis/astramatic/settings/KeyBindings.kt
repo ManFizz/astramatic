@@ -141,6 +141,10 @@ class KeyBindings(private val prefs: SharedPreferences) {
 
     fun removeAxis(action: RemoteAction, binding: AxisBinding) = saveAxes(action, axesOf(action) - binding)
 
+    /** Развернуть направление оси, если «вверх» работает как «вниз». */
+    fun invertAxis(action: RemoteAction, binding: AxisBinding) =
+        saveAxes(action, axesOf(action) - binding + binding.copy(inverted = !binding.inverted))
+
     fun resetAll() = RemoteAction.entries.forEach {
         saveKeys(it, it.defaultKeys)
         saveAxes(it, emptySet())
