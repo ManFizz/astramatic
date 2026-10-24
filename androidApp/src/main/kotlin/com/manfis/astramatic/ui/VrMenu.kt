@@ -52,7 +52,7 @@ class VrMenuState {
     /** Компактная полоска управления воспроизведением или большое меню. */
     enum class Mode { Controls, Menu }
 
-    enum class Tab { Video, Files, Headset }
+    enum class Tab { Video, Files, Headset, Remote }
 
     var mode by mutableStateOf(Mode.Menu)
     var tab by mutableStateOf(Tab.Files)
@@ -61,6 +61,9 @@ class VrMenuState {
     var title by mutableStateOf<String?>(null)
     var format by mutableStateOf(VideoFormat())
     var stereo by mutableStateOf(true)
+
+    /** Последняя кнопка пульта: что именно он присылает. */
+    var lastKey by mutableStateOf<String?>(null)
 
     val library = LibraryState()
 }
@@ -180,17 +183,25 @@ private fun ControlsBar(state: VrMenuState, actions: VrMenuActions) {
             },
             valueRange = 0f..duration.coerceAtLeast(1).toFloat(),
         )
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            TextButton(onClick = { actions.seekBy(-30_000) }, contentPadding = compact) { Text("−30") }
-            TextButton(onClick = { actions.seekBy(-10_000) }, contentPadding = compact) { Text("−10") }
-            Button(onClick = actions::togglePlayback, contentPadding = compact) { Text(if (playing) "⏸" else "▶") }
-            TextButton(onClick = { actions.seekBy(10_000) }, contentPadding = compact) { Text("+10") }
-            TextButton(onClick = { actions.seekBy(30_000) }, contentPadding = compact) { Text("+30") }
-            Spacer(Modifier.weight(1f))
-            TextButton(onClick = actions::recenter, contentPadding = compact) { Text("Центр") }
-            TextButton(onClick = actions::toggleStereo, contentPadding = compact) { Text(if (state.stereo) "2D" else "VR") }
-            FilledTonalButton(onClick = { actions.openMenu(VrMenuState.Tab.Video) }, contentPadding = compact) {
-                Text("☰ Меню")
+        // Три зоны: служебные кнопки слева и справа равной ширины, перемотка и пауза — точно по центру.
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = actions::recenter, contentPadding = compact) { Text("Центр") }
+                TextButton(onClick = actions::toggleStereo, contentPadding = compact) {
+                    Text(if (state.stereo) "2D" else "VR")
+                }
+            }
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = { actions.seekBy(-30_000) }, contentPadding = compact) { Text("−30") }
+                TextButton(onClick = { actions.seekBy(-10_000) }, contentPadding = compact) { Text("−10") }
+                Button(onClick = actions::togglePlayback, contentPadding = compact) { Text(if (playing) "⏸" else "▶") }
+                TextButton(onClick = { actions.seekBy(10_000) }, contentPadding = compact) { Text("+10") }
+                TextButton(onClick = { actions.seekBy(30_000) }, contentPadding = compact) { Text("+30") }
+            }
+            Row(Modifier.weight(1f), horizontalArrangement = Arrangement.End) {
+                FilledTonalButton(onClick = { actions.openMenu(VrMenuState.Tab.Video) }, contentPadding = compact) {
+                    Text("☰ Меню")
+                }
             }
         }
     }
@@ -209,6 +220,7 @@ private fun MenuContent(state: VrMenuState, actions: VrMenuActions) {
             if (state.title != null) TabChip(state, VrMenuState.Tab.Video, "🎬 Видео")
             TabChip(state, VrMenuState.Tab.Files, "📁 Файлы")
             TabChip(state, VrMenuState.Tab.Headset, "👓 Шлем")
+            TabChip(state, VrMenuState.Tab.Remote, "🎮 Пульт")
             Spacer(Modifier.weight(1f))
             OutlinedButton(onClick = actions::toggleStereo) { Text(if (state.stereo) "2D" else "VR") }
             if (state.title != null) Button(onClick = actions::hide) { Text("К видео") }
@@ -231,6 +243,7 @@ private fun MenuContent(state: VrMenuState, actions: VrMenuActions) {
                     onSaved = actions::headsetSaved,
                     closeOnSave = false,
                 )
+                VrMenuState.Tab.Remote -> RemoteTab(state)
             }
         }
     }
@@ -276,6 +289,47 @@ private fun VideoTab(state: VrMenuState, actions: VrMenuActions) {
         )
 
         OutlinedButton(onClick = actions::recenter) { Text("Рецентр — центр видео туда, куда смотрю") }
+    }
+}
+
+/** Справка по кнопкам и проверка, что присылает пульт. */
+@Composable
+private fun RemoteTab(state: VrMenuState) {
+    Column(
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text("Последняя нажатая кнопка", style = MaterialTheme.typography.titleMedium)
+        Text(
+            state.lastKey ?: "Нажмите любую кнопку на пульте",
+            style = MaterialTheme.typography.headlineSmall,
+            color = MaterialTheme.colorScheme.primary,
+        )
+        Text(
+            "Если кнопка не делает того, что нужно, — сообщите её название отсюда, добавлю.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        HorizontalDivider(Modifier.padding(vertical = 8.dp))
+        listOf(
+            "OK, A, Enter, Пробел, ⏯" to "пауза / воспроизведение",
+            "← → , L1 R1, ⏪ ⏩" to "перемотка на 10 с",
+            "⏮ ⏭" to "перемотка на 30 с",
+            "↑, Y" to "рецентр",
+            "↓, Menu, Start, Select" to "полоска управления → меню → скрыть",
+            "X, V" to "2D / VR",
+            "Назад, B" to "закрыть меню / полоску",
+            "Стик и крестовина геймпада" to "как стрелки",
+            "Клик мыши (режим мыши пульта)" to "как кнопка Cardboard",
+        ).forEach { (keys, action) ->
+            Row(Modifier.fillMaxWidth()) {
+                Text(keys, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+                Text(action, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+            }
+        }
+        Text(
+            "Пока открыто меню, стрелки и OK ходят по его пунктам.",
+            style = MaterialTheme.typography.bodySmall,
+        )
     }
 }
 

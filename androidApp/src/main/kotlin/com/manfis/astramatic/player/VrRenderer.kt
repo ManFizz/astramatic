@@ -15,6 +15,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 import javax.microedition.khronos.egl.EGLConfig
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.atan2
 
 /**
@@ -93,6 +94,7 @@ class VrRenderer(
     private val headView = FloatArray(16)
     private var videoYawDeg = 0f
     private var panelYawDeg = 0f
+    private var controlsFollowing = false
     private val videoModel = FloatArray(16)
     private val panelModel = FloatArray(16)
     private val cursorModel = FloatArray(16)
@@ -144,6 +146,14 @@ class VrRenderer(
             if (placePanelFrames.get() > 0) {
                 placePanelFrames.decrementAndGet()
                 panelYawDeg = lookYawDeg
+            } else if (panelLayout == PanelLayout.Controls) {
+                // Полоска мягко догоняет взгляд, если отвернуться от неё далеко в сторону, и встаёт по центру.
+                val diff = wrapDegrees(lookYawDeg - panelYawDeg)
+                if (abs(diff) > CONTROLS_FOLLOW_DEG) controlsFollowing = true
+                if (controlsFollowing) {
+                    panelYawDeg = wrapDegrees(panelYawDeg + diff * CONTROLS_FOLLOW_SPEED)
+                    if (abs(diff) < 1f) controlsFollowing = false
+                }
             }
         }
 
@@ -155,6 +165,8 @@ class VrRenderer(
 
         gaze = if (panelVisible) computeGaze(layout) else null
     }
+
+    private fun wrapDegrees(deg: Float): Float = ((deg + 540f) % 360f) - 180f
 
     /** Пересечение луча взгляда с плоскостью панели, в координатах панели. */
     private fun computeGaze(layout: PanelLayout): Gaze? {
@@ -330,6 +342,9 @@ class VrRenderer(
 
         private const val PANEL_DISTANCE = 2.5f
         private const val PLACE_PANEL_FRAMES = 45
+        /** Полоска шириной ±20° от центра; дальше 30° — уже точно смотрят не на неё. */
+        private const val CONTROLS_FOLLOW_DEG = 30f
+        private const val CONTROLS_FOLLOW_SPEED = 0.08f
         private const val CURSOR_SIZE = 0.04f
         private const val CURSOR_LIFT = 0.01f
 

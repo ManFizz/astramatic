@@ -9,7 +9,9 @@ import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.view.Gravity
+import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
@@ -37,6 +39,7 @@ import com.manfis.astramatic.model.VideoFormat
 import com.manfis.astramatic.ui.VrMenu
 import com.manfis.astramatic.ui.VrMenuActions
 import com.manfis.astramatic.ui.VrMenuState
+import kotlin.math.abs
 
 /**
  * VR-оболочка: видео, меню (плеер, файлы, шлем) и переключение VR ⇄ 2D.
@@ -300,6 +303,9 @@ class PlayerActivity : ComponentActivity() {
     // --- Пульт и геймпад --------------------------------------------------------------------
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) {
+            menu.lastKey = "${KeyEvent.keyCodeToString(event.keyCode).removePrefix("KEYCODE_")} · ${event.device?.name ?: "?"}"
+        }
         // В шлеме меню живёт на виртуальном дисплее: стрелки и OK отправляем туда.
         if (uiHost.place == VrUiHost.Place.Vr) {
             val forwarded = when (event.keyCode) {
@@ -317,6 +323,45 @@ class PlayerActivity : ComponentActivity() {
             }
         }
         return super.dispatchKeyEvent(event)
+    }
+
+    // Стик и крестовина геймпада приходят осями, а не кнопками: превращаем их в стрелки.
+    private var stickX = 0
+    private var stickY = 0
+
+    override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
+        if (!event.isFromSource(InputDevice.SOURCE_JOYSTICK) || event.action != MotionEvent.ACTION_MOVE) {
+            return super.dispatchGenericMotionEvent(event)
+        }
+        // Если крестовина и так присылает стрелки кнопками, её ось не трогаем, чтобы не было двойных нажатий.
+        val hatIsKeys = event.device?.hasKeys(KeyEvent.KEYCODE_DPAD_UP)?.firstOrNull() == true
+        val x = axisDirection(event, MotionEvent.AXIS_HAT_X, MotionEvent.AXIS_X, hatIsKeys)
+        val y = axisDirection(event, MotionEvent.AXIS_HAT_Y, MotionEvent.AXIS_Y, hatIsKeys)
+        if (x != stickX) {
+            stickX = x
+            if (x != 0) pressKey(if (x < 0) KeyEvent.KEYCODE_DPAD_LEFT else KeyEvent.KEYCODE_DPAD_RIGHT)
+        }
+        if (y != stickY) {
+            stickY = y
+            if (y != 0) pressKey(if (y < 0) KeyEvent.KEYCODE_DPAD_UP else KeyEvent.KEYCODE_DPAD_DOWN)
+        }
+        return true
+    }
+
+    private fun axisDirection(event: MotionEvent, hatAxis: Int, stickAxis: Int, ignoreHat: Boolean): Int {
+        val hat = if (ignoreHat) 0f else event.getAxisValue(hatAxis)
+        val value = if (abs(hat) > 0.5f) hat else event.getAxisValue(stickAxis)
+        return when {
+            value < -STICK_THRESHOLD -> -1
+            value > STICK_THRESHOLD -> 1
+            else -> 0
+        }
+    }
+
+    private fun pressKey(keyCode: Int) {
+        val now = SystemClock.uptimeMillis()
+        dispatchKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, 0))
+        dispatchKeyEvent(KeyEvent(now, now, KeyEvent.ACTION_UP, keyCode, 0))
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
@@ -345,6 +390,8 @@ class PlayerActivity : ComponentActivity() {
             KeyEvent.KEYCODE_DPAD_RIGHT,
             KeyEvent.KEYCODE_MEDIA_FAST_FORWARD,
             KeyEvent.KEYCODE_BUTTON_R1 -> menuActions.seekBy(SEEK_STEP_MS)
+            KeyEvent.KEYCODE_MEDIA_PREVIOUS -> menuActions.seekBy(-LONG_SEEK_STEP_MS)
+            KeyEvent.KEYCODE_MEDIA_NEXT -> menuActions.seekBy(LONG_SEEK_STEP_MS)
             KeyEvent.KEYCODE_DPAD_UP,
             KeyEvent.KEYCODE_BUTTON_Y -> renderer.recenter()
             KeyEvent.KEYCODE_V,
@@ -410,6 +457,8 @@ class PlayerActivity : ComponentActivity() {
 
     companion object {
         private const val SEEK_STEP_MS = 10_000L
+        private const val LONG_SEEK_STEP_MS = 30_000L
+        private const val STICK_THRESHOLD = 0.6f
         private const val LONG_PRESS_MS = 500L
         private const val DRAG_INTERVAL_MS = 16L
         private const val HOVER_INTERVAL_MS = 50L
