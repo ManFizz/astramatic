@@ -4,6 +4,7 @@ plugins {
     alias(libs.plugins.kotlinJvm)
     alias(libs.plugins.composeMultiplatform)
     alias(libs.plugins.composeCompiler)
+    alias(libs.plugins.kotlinSerialization)
 }
 
 dependencies {
@@ -13,6 +14,13 @@ dependencies {
     implementation(libs.kotlinx.coroutinesSwing)
 
     implementation(libs.compose.uiToolingPreview)
+    implementation(libs.compose.material3)
+
+    implementation(libs.ktor.server.cio)
+    implementation(libs.ktor.server.websockets)
+    implementation(libs.ktor.server.partialContent)
+    implementation(libs.ktor.server.autoHead)
+    implementation(libs.zxing.core)
 }
 
 compose.desktop {
@@ -20,8 +28,8 @@ compose.desktop {
         mainClass = "com.manfis.astramatic.MainKt"
 
         nativeDistributions {
-            targetFormats(TargetFormat.Dmg, TargetFormat.Msi, TargetFormat.Deb)
-            packageName = "com.manfis.astramatic"
+            targetFormats(TargetFormat.Msi)
+            packageName = "AstraMatic"
             packageVersion = "1.0.0"
         }
     }

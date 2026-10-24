@@ -21,7 +21,7 @@ import java.io.IOException
 import java.security.MessageDigest
 
 /**
- * Превью для видео по SMB: системный извлекатель кадров читает файл с компьютера кусками по запросу.
+ * Превью для видео по SMB и с AstraMatic на ПК (`httpvideo:`): системный извлекатель кадров читает файл с компьютера кусками по запросу.
  * Готовый кадр кладётся в кеш приложения, второй раз сеть не нужна.
  */
 class SmbThumbnailFetcher(
@@ -49,6 +49,7 @@ class SmbThumbnailFetcher(
     }
 
     private fun extractTo(target: File) {
+        if (uri.scheme == HTTP_VIDEO_SCHEME) return extractHttp(target)
         val server = SmbServerStore(context).get(SmbUris.serverId(uri)) ?: throw IOException("Компьютер удалён")
         SmbConnections.openFile(server, SmbUris.path(uri)).use { smbFile ->
             val length = smbFile.fileInformation.standardInformation.endOfFile
@@ -63,17 +64,33 @@ class SmbThumbnailFetcher(
                     override fun getSize() = length
                     override fun close() = Unit
                 })
-                val durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0
-                // Не самый первый кадр: в начале часто чёрный экран или заставка.
-                val timeUs = (durationMs * 1000 / 10).coerceAtMost(60_000_000)
-                val frame = retriever.getScaledFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, THUMB_WIDTH * 2, THUMB_WIDTH * 2)
-                    ?: throw IOException("Не удалось достать кадр")
-                val picture = oneEye(frame)
-                target.outputStream().use { picture.compress(Bitmap.CompressFormat.JPEG, 85, it) }
+                saveFrame(retriever, target)
             } finally {
                 retriever.release()
             }
         }
+    }
+
+    /** Видео с AstraMatic на ПК: извлекатель сам читает его по HTTP кусками (Range) с ключом. */
+    private fun extractHttp(target: File) {
+        val url = uri.toString().removePrefix("$HTTP_VIDEO_SCHEME:")
+        val token = RemoteAuth(context).tokenFor(android.net.Uri.parse(url).authority)
+        val retriever = MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(url, token?.let { mapOf("Authorization" to "Bearer $it") } ?: emptyMap())
+            saveFrame(retriever, target)
+        } finally {
+            retriever.release()
+        }
+    }
+
+    private fun saveFrame(retriever: MediaMetadataRetriever, target: File) {
+        val durationMs = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull() ?: 0
+        // Не самый первый кадр: в начале часто чёрный экран или заставка.
+        val timeUs = (durationMs * 1000 / 10).coerceAtMost(60_000_000)
+        val frame = retriever.getScaledFrameAtTime(timeUs, MediaMetadataRetriever.OPTION_CLOSEST_SYNC, THUMB_WIDTH * 2, THUMB_WIDTH * 2)
+            ?: throw IOException("Не удалось достать кадр")
+        target.outputStream().use { oneEye(frame).compress(Bitmap.CompressFormat.JPEG, 85, it) }
     }
 
     /** Стерео-кадр показываем одним глазом: левая половина у широких, верхняя — у высоких. */
@@ -85,13 +102,16 @@ class SmbThumbnailFetcher(
 
     class Factory(private val context: Context) : Fetcher.Factory<Uri> {
         override fun create(data: Uri, options: Options, imageLoader: ImageLoader): Fetcher? {
-            if (data.scheme != SmbUris.SCHEME) return null
+            if (data.scheme != SmbUris.SCHEME && data.scheme != HTTP_VIDEO_SCHEME) return null
             return SmbThumbnailFetcher(android.net.Uri.parse(data.toString()), context.applicationContext)
         }
     }
 
-    private companion object {
-        const val THUMB_WIDTH = 320
-        val limit = Semaphore(2)
+    companion object {
+        /** Превью видео по HTTP: `httpvideo:<url>` — чтобы Coil не скачивал весь файл обычным загрузчиком. */
+        const val HTTP_VIDEO_SCHEME = "httpvideo"
+
+        private const val THUMB_WIDTH = 320
+        private val limit = Semaphore(2)
     }
 }

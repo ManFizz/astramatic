@@ -24,6 +24,9 @@ playServicesVision = "20.1.3"
 jspecify = "1.0.0"
 smbj = "0.15.0"
 coil = "3.6.3"
+ktor = "3.6.0"
+kotlinx-serialization = "1.11.0"
+zxing = "3.5.4"
 codeScanner = "16.1.0"
 
 [libraries]
@@ -51,6 +54,12 @@ protobuf-javalite = { module = "com.google.protobuf:protobuf-javalite", version.
 jspecify = { module = "org.jspecify:jspecify", version.ref = "jspecify" }
 media3-exoplayer = { module = "androidx.media3:media3-exoplayer", version.ref = "media3" }
 smbj = { module = "com.hierynomus:smbj", version.ref = "smbj" }
+kotlinx-serializationJson = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
+ktor-server-cio = { module = "io.ktor:ktor-server-cio", version.ref = "ktor" }
+ktor-server-websockets = { module = "io.ktor:ktor-server-websockets", version.ref = "ktor" }
+ktor-server-partialContent = { module = "io.ktor:ktor-server-partial-content", version.ref = "ktor" }
+ktor-server-autoHead = { module = "io.ktor:ktor-server-auto-head-response", version.ref = "ktor" }
+zxing-core = { module = "com.google.zxing:core", version.ref = "zxing" }
 coil-compose = { module = "io.coil-kt.coil3:coil-compose", version.ref = "coil" }
 coil-network = { module = "io.coil-kt.coil3:coil-network-okhttp", version.ref = "coil" }
 coil-video = { module = "io.coil-kt.coil3:coil-video", version.ref = "coil" }
@@ -65,3 +74,4 @@ composeMultiplatform = { id = "org.jetbrains.compose", version.ref = "composeMul
 composeCompiler = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
 kotlinJvm = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
 kotlinMultiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }
+kotlinSerialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }

@@ -45,6 +45,13 @@ import kotlin.math.hypot
 import com.manfis.astramatic.library.DarkframeClient
 import com.manfis.astramatic.library.DarkframeStore
 import java.util.concurrent.Executors
+import android.os.Build
+import com.manfis.astramatic.library.DesktopClient
+import com.manfis.astramatic.library.DesktopServer
+import com.manfis.astramatic.model.VideoFormatDetector
+import com.manfis.astramatic.remote.PlayerStatus
+import com.manfis.astramatic.remote.RemoteCommand
+import com.manfis.astramatic.ui.DefaultFormat
 import kotlin.math.abs
 
 /**
@@ -66,8 +73,26 @@ class PlayerActivity : ComponentActivity() {
     private val formats by lazy { FormatMemory(this) }
     private val darkframes by lazy { DarkframeStore(this) }
 
-    /** Сеть (позиции в Darkframe) — не на главном потоке, по одному запросу за раз. */
+    /** Сеть (позиции в Darkframe, списки с ПК) — не на главном потоке, по одному запросу за раз. */
     private val io = Executors.newSingleThreadExecutor()
+
+    private val remote by lazy {
+        RemoteLink(
+            context = this,
+            status = {
+                PlayerStatus(
+                    device = Build.MODEL,
+                    title = menu.title,
+                    positionMs = player.currentPosition,
+                    durationMs = player.duration.coerceAtLeast(0),
+                    playing = player.isPlaying,
+                    stereo = stereoMode,
+                    format = menu.title?.let { menu.format.encode() },
+                )
+            },
+            onCommand = ::onRemoteCommand,
+        )
+    }
     private var playlist: Playlist? = null
 
     private val prefs by lazy { getSharedPreferences("player", MODE_PRIVATE) }
@@ -269,6 +294,38 @@ class PlayerActivity : ComponentActivity() {
         override fun run() {
             if (player.isPlaying) savePosition()
             handler.postDelayed(this, SAVE_INTERVAL_MS)
+        }
+    }
+
+    // --- Пульт с ПК ------------------------------------------------------------------------
+
+    private fun onRemoteCommand(server: DesktopServer, command: RemoteCommand) {
+        when (command) {
+            RemoteCommand.TogglePlayback -> togglePlayback()
+            is RemoteCommand.SeekBy -> menuActions.seekBy(command.deltaMs)
+            is RemoteCommand.SeekTo -> player.seekTo(command.positionMs)
+            RemoteCommand.PreviousFile -> menuActions.previousFile()
+            RemoteCommand.NextFile -> menuActions.nextFile()
+            RemoteCommand.Recenter -> renderer.recenter()
+            RemoteCommand.ToggleStereo -> toggleStereoMode()
+            is RemoteCommand.SetFormat -> VideoFormat.decode(command.format)?.let(menuActions::setFormat)
+            is RemoteCommand.Open -> openFromDesktop(server, command)
+        }
+    }
+
+    /** Видео, выбранное в окне AstraMatic на ПК, — вместе с остальными видео его папки. */
+    private fun openFromDesktop(server: DesktopServer, command: RemoteCommand.Open) {
+        val fallback = DefaultFormat.load(this)
+        io.execute {
+            val parent = command.path.substringBeforeLast('/', "")
+            val videos = runCatching { DesktopClient.list(server, command.folderId, parent) }.getOrNull()
+                ?.filter { !it.isDirectory }
+                ?: return@execute
+            val index = videos.indexOfFirst { it.path == command.path }.takeIf { it >= 0 } ?: return@execute
+            val items = videos.map {
+                PlaylistItem(server.fileUri(command.folderId, it.path), it.name, VideoFormatDetector.detect(it.name) ?: fallback)
+            }
+            runOnUiThread { openPlaylist(Playlist(items, index)) }
         }
     }
 
@@ -544,6 +601,11 @@ class PlayerActivity : ComponentActivity() {
         if (player.isPlaying) player.pause() else player.play()
     }
 
+    override fun onStart() {
+        super.onStart()
+        remote.start()
+    }
+
     override fun onResume() {
         super.onResume()
         cardboardView.onResume()
@@ -555,6 +617,7 @@ class PlayerActivity : ComponentActivity() {
     }
 
     override fun onStop() {
+        remote.stop()
         savePosition()
         player.pause()
         super.onStop()

@@ -31,25 +31,83 @@ import com.google.mlkit.vision.codescanner.GmsBarcodeScannerOptions
 import com.google.mlkit.vision.codescanner.GmsBarcodeScanning
 import com.manfis.astramatic.library.DarkframeClient
 import com.manfis.astramatic.library.DarkframeServer
+import com.manfis.astramatic.library.DesktopClient
+import com.manfis.astramatic.library.DesktopServer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/**
- * Подключение к Darkframe как ещё одно устройство (как телефон в Darkframe → «Устройства»),
- * а для уже подключённого — переименование и удаление.
- */
+/** Подключение к Darkframe как ещё одно устройство (как телефон в Darkframe → «Устройства»). */
 @Composable
 fun DarkframeScreen(
     initial: DarkframeServer?,
     onSave: (DarkframeServer) -> Unit,
     onDelete: (DarkframeServer) -> Unit,
     onCancel: () -> Unit,
+) = PairScreen(
+    title = "Darkframe",
+    instructions = "На компьютере в Darkframe откройте «Панель управления → Устройства», включите доступ с телефона " +
+        "и нажмите «Подключить устройство». Отсканируйте QR-код или вставьте ссылку под ним.",
+    placeholder = "http://192.168.0.126:7860/pair?c=…",
+    deleteNote = "Удаление здесь не отключает устройство в Darkframe — его можно убрать в «Устройствах» на компьютере.",
+    initial = initial,
+    initialName = initial?.name,
+    address = initial?.baseUrl,
+    pair = { link ->
+        DarkframeClient.pair(link).also {
+            // Сразу проверяем, что библиотека открывается с выданным доступом.
+            DarkframeClient.collections(it)
+        }
+    },
+    rename = { server, name -> server.copy(name = name.ifBlank { server.name }) },
+    onSave = onSave,
+    onDelete = onDelete,
+    onCancel = onCancel,
+)
+
+/** Подключение к AstraMatic на ПК по QR-коду из его окна. */
+@Composable
+fun DesktopScreen(
+    initial: DesktopServer?,
+    onSave: (DesktopServer) -> Unit,
+    onDelete: (DesktopServer) -> Unit,
+    onCancel: () -> Unit,
+) = PairScreen(
+    title = "Компьютер (AstraMatic)",
+    instructions = "Запустите AstraMatic на компьютере, добавьте в нём папки с видео и отсканируйте QR-код из окна. " +
+        "Телефон и компьютер должны быть в одной сети.",
+    placeholder = "http://192.168.0.126:47860/pair?key=…",
+    deleteNote = "Чтобы отключить все телефоны сразу, на ПК есть кнопка «Новый ключ».",
+    initial = initial,
+    initialName = initial?.name,
+    address = initial?.baseUrl,
+    pair = DesktopClient::pair,
+    rename = { server, name -> server.copy(name = name.ifBlank { server.name }) },
+    onSave = onSave,
+    onDelete = onDelete,
+    onCancel = onCancel,
+)
+
+/** Общий экран: подключение по QR-коду или ссылке, для уже подключённого — переименование и удаление. */
+@Composable
+private fun <T> PairScreen(
+    title: String,
+    instructions: String,
+    placeholder: String,
+    deleteNote: String,
+    initial: T?,
+    initialName: String?,
+    address: String?,
+    pair: (String) -> T,
+    rename: (T, String) -> T,
+    onSave: (T) -> Unit,
+    onDelete: (T) -> Unit,
+    onCancel: () -> Unit,
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     var link by remember { mutableStateOf("") }
-    var name by remember { mutableStateOf(initial?.name ?: "") }
+    var name by remember { mutableStateOf(initialName ?: "") }
     var busy by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf<String?>(null) }
 
@@ -57,17 +115,10 @@ fun DarkframeScreen(
         busy = true
         status = null
         scope.launch {
-            val result = withContext(Dispatchers.IO) {
-                runCatching {
-                    val server = DarkframeClient.pair(text)
-                    // Сразу проверяем, что библиотека открывается с выданным доступом.
-                    DarkframeClient.collections(server)
-                    server
-                }
-            }
+            val result = withContext(Dispatchers.IO) { runCatching { pair(text) } }
             busy = false
             result
-                .onSuccess { onSave(it.copy(name = name.ifBlank { it.name })) }
+                .onSuccess { onSave(rename(it, name)) }
                 .onFailure { status = it.message ?: it::class.simpleName }
         }
     }
@@ -76,7 +127,7 @@ fun DarkframeScreen(
         modifier = Modifier.fillMaxSize().safeContentPadding().verticalScroll(rememberScrollState()).padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Text(if (initial == null) "Подключить Darkframe" else "Darkframe", style = MaterialTheme.typography.headlineSmall)
+        Text(if (initial == null) "Подключить: $title" else title, style = MaterialTheme.typography.headlineSmall)
 
         OutlinedTextField(
             value = name, onValueChange = { name = it },
@@ -84,11 +135,7 @@ fun DarkframeScreen(
         )
 
         if (initial == null) {
-            Text(
-                "На компьютере в Darkframe откройте «Панель управления → Устройства», включите доступ с телефона " +
-                    "и нажмите «Подключить устройство». Отсканируйте QR-код или вставьте ссылку под ним.",
-                style = MaterialTheme.typography.bodyMedium,
-            )
+            Text(instructions, style = MaterialTheme.typography.bodyMedium)
             Button(enabled = !busy, onClick = {
                 val options = GmsBarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build()
                 GmsBarcodeScanning.getClient(context, options).startScan()
@@ -99,12 +146,12 @@ fun DarkframeScreen(
             OutlinedTextField(
                 value = link, onValueChange = { link = it },
                 label = { Text("…или ссылка") },
-                placeholder = { Text("http://192.168.0.126:7860/pair?c=…") },
+                placeholder = { Text(placeholder) },
                 singleLine = true, modifier = Modifier.fillMaxWidth(),
             )
             OutlinedButton(enabled = !busy && link.isNotBlank(), onClick = { connect(link) }) { Text("Подключить по ссылке") }
-        } else {
-            Text(initial.baseUrl, style = MaterialTheme.typography.bodySmall)
+        } else if (address != null) {
+            Text(address, style = MaterialTheme.typography.bodySmall)
         }
 
         status?.let { Text(it, color = MaterialTheme.colorScheme.error) }
@@ -112,16 +159,11 @@ fun DarkframeScreen(
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             if (initial != null) {
-                Button(onClick = { onSave(initial.copy(name = name.ifBlank { initial.name })) }) { Text("Сохранить") }
+                Button(onClick = { onSave(rename(initial, name)) }) { Text("Сохранить") }
                 TextButton(onClick = { onDelete(initial) }) { Text("Удалить") }
             }
             TextButton(onClick = onCancel) { Text("Отмена") }
         }
-        if (initial != null) {
-            Text(
-                "Удаление здесь не отключает устройство в Darkframe — его можно убрать в «Устройствах» на компьютере.",
-                style = MaterialTheme.typography.bodySmall,
-            )
-        }
+        if (initial != null) Text(deleteNote, style = MaterialTheme.typography.bodySmall)
     }
 }

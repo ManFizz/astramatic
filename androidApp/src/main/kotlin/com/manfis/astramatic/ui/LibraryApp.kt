@@ -53,6 +53,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
 import com.manfis.astramatic.library.DarkframeRef
 import com.manfis.astramatic.library.DarkframeServer
+import com.manfis.astramatic.library.DesktopServer
 import com.manfis.astramatic.library.MediaEntry
 import com.manfis.astramatic.library.MediaLibrary
 import com.manfis.astramatic.library.MediaSourceRef
@@ -75,6 +76,7 @@ internal sealed interface Screen {
     data class Browse(val source: MediaSourceRef, val path: String, val title: String) : Screen
     data class EditServer(val server: SmbServer?) : Screen
     data class EditDarkframe(val server: DarkframeServer?) : Screen
+    data class EditDesktop(val server: DesktopServer?) : Screen
 }
 
 /** Где пользователь находится в библиотеке. Вынесено наружу, чтобы переживать переключение вкладок меню. */
@@ -127,6 +129,7 @@ fun LibraryApp(
             onOpen = { source, title -> push(Screen.Browse(source, "", title)) },
             onEditServer = { push(Screen.EditServer(it)) },
             onEditDarkframe = { push(Screen.EditDarkframe(it)) },
+            onEditDesktop = { push(Screen.EditDesktop(it)) },
             onPickFile = { uri, name -> onPlay(Playlist.single(item(uri, name))) },
         )
 
@@ -148,6 +151,19 @@ fun LibraryApp(
             onDelete = {
                 library.servers.delete(it.id)
                 SmbConnections.forget(it.id)
+                pop()
+            },
+            onCancel = ::pop,
+        )
+
+        is Screen.EditDesktop -> DesktopScreen(
+            initial = screen.server,
+            onSave = {
+                library.desktops.save(it)
+                pop()
+            },
+            onDelete = {
+                library.desktops.delete(it.id)
                 pop()
             },
             onCancel = ::pop,
@@ -178,11 +194,13 @@ private fun HomeScreen(
     onOpen: (MediaSourceRef, String) -> Unit,
     onEditServer: (SmbServer?) -> Unit,
     onEditDarkframe: (DarkframeServer?) -> Unit,
+    onEditDesktop: (DesktopServer?) -> Unit,
     onPickFile: (Uri, String) -> Unit,
 ) {
     val context = LocalContext.current
     val servers = remember { library.servers.all() }
     val darkframes = remember { library.darkframes.all() }
+    val desktops = remember { library.desktops.all() }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             runCatching {
@@ -205,6 +223,11 @@ private fun HomeScreen(
                 onOpen(MediaSourceRef.Smb(server.id), server.title)
             }
         }
+        desktops.forEach { server ->
+            SourceRow("💻", server.name, "AstraMatic · ${server.authority}", onEdit = { onEditDesktop(server) }.takeIf { allowEditing }) {
+                onOpen(MediaSourceRef.Desktop(server.id), server.name)
+            }
+        }
         darkframes.forEach { server ->
             SourceRow("🖼", server.name, "Darkframe · ${server.authority}", onEdit = { onEditDarkframe(server) }.takeIf { allowEditing }) {
                 onOpen(MediaSourceRef.Darkframe(server.id), server.name)
@@ -212,7 +235,8 @@ private fun HomeScreen(
         }
         if (allowEditing) {
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { onEditServer(null) }) { Text("+ Компьютер (SMB)") }
+                OutlinedButton(onClick = { onEditDesktop(null) }) { Text("+ Компьютер (AstraMatic)") }
+                OutlinedButton(onClick = { onEditServer(null) }) { Text("+ Папка Windows (SMB)") }
                 OutlinedButton(onClick = { onEditDarkframe(null) }) { Text("+ Darkframe") }
                 OutlinedButton(onClick = { picker.launch(arrayOf("video/*")) }) { Text("Открыть файл…") }
             }
@@ -553,7 +577,7 @@ private fun displayName(context: Context, uri: Uri): String =
         ?: uri.lastPathSegment ?: ""
 
 /** Формат по умолчанию для файлов без тегов в имени. */
-private object DefaultFormat {
+internal object DefaultFormat {
     private const val PREFS = "library"
 
     fun load(context: Context): VideoFormat {

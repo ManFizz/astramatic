@@ -12,6 +12,7 @@ sealed interface MediaSourceRef {
     data object Phone : MediaSourceRef
     data class Smb(val serverId: String) : MediaSourceRef
     data class Darkframe(val serverId: String) : MediaSourceRef
+    data class Desktop(val serverId: String) : MediaSourceRef
 }
 
 /** Видео из библиотеки Darkframe: позиция просмотра у него общая с Darkframe. */
@@ -35,6 +36,7 @@ class MediaLibrary(context: Context) {
     private val context = context.applicationContext
     val servers = SmbServerStore(context)
     val darkframes = DarkframeStore(context)
+    val desktops = DesktopStore(context)
 
     /** Содержимое папки: сначала папки, затем видео, по алфавиту. Бросает исключение при ошибке сети или доступа. */
     suspend fun list(source: MediaSourceRef, path: String): List<MediaEntry> = withContext(Dispatchers.IO) {
@@ -43,6 +45,8 @@ class MediaLibrary(context: Context) {
             is MediaSourceRef.Smb -> listSmb(source.serverId, path)
             // У Darkframe свой порядок (ручной в коллекциях) — его и держим.
             is MediaSourceRef.Darkframe -> return@withContext listDarkframe(source.serverId, path)
+            // ПК уже отдаёт папки первыми и по алфавиту.
+            is MediaSourceRef.Desktop -> return@withContext listDesktop(source.serverId, path)
         }
         entries.sortedWith(compareBy<MediaEntry> { !it.isDirectory }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.name })
     }
@@ -61,6 +65,27 @@ class MediaLibrary(context: Context) {
                     playUri = if (it.isDirectory) null else SmbUris.build(serverId, childPath),
                 ).let { entry -> entry.copy(thumbnail = entry.playUri?.toString()) }
             }
+    }
+
+    /** Пути ПК: "" — общие папки, `<id папки>/<путь внутри>` — содержимое. */
+    private fun listDesktop(serverId: String, path: String): List<MediaEntry> {
+        val server = desktops.get(serverId) ?: error("Компьютер удалён из списка")
+        if (path.isEmpty()) {
+            return DesktopClient.info(server).folders.map { MediaEntry(it.name, "${it.id}/", isDirectory = true) }
+        }
+        val folderId = path.substringBefore('/')
+        val inner = path.substringAfter('/', "")
+        return DesktopClient.list(server, folderId, inner).map {
+            val playUri = if (it.isDirectory) null else server.fileUri(folderId, it.path)
+            MediaEntry(
+                name = it.name,
+                path = "$folderId/${it.path}",
+                isDirectory = it.isDirectory,
+                size = it.size,
+                playUri = playUri,
+                thumbnail = playUri?.let { uri -> "${SmbThumbnailFetcher.HTTP_VIDEO_SCHEME}:$uri" },
+            )
+        }
     }
 
     /**
