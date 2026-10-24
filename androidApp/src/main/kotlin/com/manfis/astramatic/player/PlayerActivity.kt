@@ -271,8 +271,8 @@ class PlayerActivity : ComponentActivity() {
                 if (event.actionMasked == MotionEvent.ACTION_CANCEL) return
                 val longPress = event.eventTime - pressStart >= LONG_PRESS_MS
                 when {
-                    // Нажатие мимо панели закрывает меню, если есть что смотреть.
-                    uiHost.place == VrUiHost.Place.Vr -> if (menu.title != null) hideMenu()
+                    // Нажатие мимо панели закрывает меню, если есть что смотреть, иначе возвращает панель перед глаза.
+                    uiHost.place == VrUiHost.Place.Vr -> if (menu.title != null) hideMenu() else renderer.placePanelInFront()
                     longPress -> renderer.recenter()
                     else -> showMenu()
                 }

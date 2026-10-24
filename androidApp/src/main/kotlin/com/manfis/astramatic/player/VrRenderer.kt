@@ -12,6 +12,7 @@ import com.manfis.astramatic.model.Projection
 import com.manfis.astramatic.model.StereoLayout
 import com.manfis.astramatic.model.VideoFormat
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import javax.microedition.khronos.egl.EGLConfig
 import kotlin.math.PI
 import kotlin.math.atan2
@@ -67,7 +68,11 @@ class VrRenderer(
     private var cursorMvp = 0
 
     private val recenterRequested = AtomicBoolean(true)
-    private val placePanelRequested = AtomicBoolean(true)
+    /**
+     * Сколько кадров подряд ставить панель перед взглядом. Не один: сразу после запуска
+     * трекинг головы ещё не определился с направлением, и панель оказалась бы где-то сбоку.
+     */
+    private val placePanelFrames = AtomicInteger(PLACE_PANEL_FRAMES)
 
     private val headView = FloatArray(16)
     private var videoYawDeg = 0f
@@ -84,8 +89,8 @@ class VrRenderer(
     /** Повернуть видео так, чтобы его центр оказался там, куда сейчас смотрит голова (только по горизонтали). */
     fun recenter() = recenterRequested.set(true)
 
-    /** Поставить панель перед взглядом в следующем кадре. */
-    fun placePanelInFront() = placePanelRequested.set(true)
+    /** Поставить панель перед взглядом. */
+    fun placePanelInFront() = placePanelFrames.set(PLACE_PANEL_FRAMES)
 
     override fun onSurfaceCreated(config: EGLConfig?) {
         textureProgram = GlUtil.program(TEXTURE_VERTEX_SHADER, TEXTURE_FRAGMENT_SHADER)
@@ -118,8 +123,13 @@ class VrRenderer(
         direction[3] = 0f
         val lookYawDeg = Math.toDegrees(atan2(-direction[0], -direction[2]).toDouble()).toFloat()
 
-        if (recenterRequested.getAndSet(false)) videoYawDeg = lookYawDeg
-        if (placePanelRequested.getAndSet(false)) panelYawDeg = lookYawDeg
+        if (!lookYawDeg.isNaN()) {
+            if (recenterRequested.getAndSet(false)) videoYawDeg = lookYawDeg
+            if (placePanelFrames.get() > 0) {
+                placePanelFrames.decrementAndGet()
+                panelYawDeg = lookYawDeg
+            }
+        }
 
         updateVideoModel(format)
         Matrix.setRotateM(panelModel, 0, panelYawDeg, 0f, 1f, 0f)
@@ -300,6 +310,7 @@ class VrRenderer(
         private const val PANEL_DISTANCE = 2.5f
         private const val PANEL_WIDTH = 2.2f
         private const val PANEL_HEIGHT = PANEL_WIDTH * PANEL_HEIGHT_PX / PANEL_WIDTH_PX
+        private const val PLACE_PANEL_FRAMES = 45
         private const val CURSOR_SIZE = 0.04f
         private const val CURSOR_LIFT = 0.01f
 

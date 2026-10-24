@@ -19,6 +19,11 @@ import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.activity.setViewTreeOnBackPressedDispatcherOwner
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.lifecycle.setViewTreeLifecycleOwner
@@ -36,6 +41,9 @@ class VrUiHost(
     private val screenOverlay: FrameLayout,
     content: @Composable () -> Unit,
 ) {
+    /** Масштаб берётся из контекста активности (экран телефона), а на панели свой — подменяем его. */
+    private var inVr by mutableStateOf(false)
+
     private val composeView = ComposeView(activity).apply {
         setViewCompositionStrategy(ViewCompositionStrategy.DisposeOnLifecycleDestroyed(activity))
         // На виртуальном дисплее нет окна активности, владельцев приходится задать явно.
@@ -44,9 +52,11 @@ class VrUiHost(
         setViewTreeViewModelStoreOwner(activity)
         setViewTreeOnBackPressedDispatcherOwner(activity)
         setContent {
+            val density = if (inVr) PANEL_DENSITY else LocalDensity.current
             CompositionLocalProvider(
                 LocalActivityResultRegistryOwner provides activity,
                 LocalOnBackPressedDispatcherOwner provides activity,
+                LocalDensity provides density,
             ) { content() }
         }
     }
@@ -84,6 +94,7 @@ class VrUiHost(
 
     fun showInVr() {
         place = Place.Vr
+        inVr = true
         val display = virtualDisplay?.display ?: return
         if (presentation?.display?.displayId == display.displayId && presentation?.isShowing == true) return
         detach()
@@ -97,6 +108,7 @@ class VrUiHost(
 
     fun showOnScreen() {
         place = Place.Screen
+        inVr = false
         if (composeView.parent === screenOverlay) return
         detach()
         screenOverlay.addView(composeView, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
@@ -146,6 +158,11 @@ class VrUiHost(
 
     /** Кнопки пульта: стрелки и OK двигают фокус по интерфейсу на панели. */
     fun key(event: KeyEvent): Boolean = presentation?.window?.decorView?.dispatchKeyEvent(event) ?: false
+
+    private companion object {
+        /** Плотность виртуального дисплея; размер шрифта не увеличиваем — панель и так крупная. */
+        val PANEL_DENSITY = Density(VrRenderer.PANEL_DENSITY_DPI / 160f, fontScale = 1f)
+    }
 
     fun release() {
         detach()
