@@ -191,25 +191,17 @@ fun RemoteScreen(state: VrMenuState) {
             color = MaterialTheme.colorScheme.primary,
         )
 
-        val capturing = state.capturingKey
-        if (capturing != null) {
-            Surface(color = MaterialTheme.colorScheme.tertiaryContainer, shape = MaterialTheme.shapes.medium) {
-                Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        "«${capturing.title}»: ${captureHint(capturing)}",
-                        modifier = Modifier.weight(1f),
-                        color = MaterialTheme.colorScheme.onTertiaryContainer,
-                    )
-                    TextButton(onClick = { state.capturingKey = null }) { Text("Отмена") }
-                }
-            }
-        }
-
         ActionGroup.entries.forEach { group ->
             HorizontalDivider(Modifier.padding(vertical = 6.dp))
             Text(group.title, style = MaterialTheme.typography.titleMedium)
             RemoteAction.entries.filter { it.group == group }.forEach { action ->
-                BindingRow(action, bindings, onAdd = { state.capturingKey = action })
+                BindingRow(
+                    action,
+                    bindings,
+                    capturing = state.capturingKey == action,
+                    onAdd = { state.capturingKey = action },
+                    onCancel = { state.capturingKey = null },
+                )
             }
         }
 
@@ -230,7 +222,30 @@ fun RemoteScreen(state: VrMenuState) {
 }
 
 @Composable
-private fun BindingRow(action: RemoteAction, bindings: KeyBindings, onAdd: () -> Unit) {
+private fun BindingRow(
+    action: RemoteAction,
+    bindings: KeyBindings,
+    capturing: Boolean,
+    onAdd: () -> Unit,
+    onCancel: () -> Unit,
+) {
+    // Подсказка — прямо в строке действия: её видно там, куда только что нажали, как бы ни был прокручен список.
+    if (capturing) {
+        Surface(color = MaterialTheme.colorScheme.tertiaryContainer, shape = MaterialTheme.shapes.medium) {
+            Row(Modifier.fillMaxWidth().padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f).padding(vertical = 8.dp)) {
+                    Text(action.title, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onTertiaryContainer)
+                    Text(
+                        captureHint(action).replaceFirstChar { it.uppercase() },
+                        style = MaterialTheme.typography.titleMedium,
+                        color = MaterialTheme.colorScheme.onTertiaryContainer,
+                    )
+                }
+                TextButton(onClick = onCancel) { Text("Отмена") }
+            }
+        }
+        return
+    }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
             Text(action.title, style = MaterialTheme.typography.bodyLarge)

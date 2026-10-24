@@ -11,7 +11,6 @@ enum class ActionGroup(val title: String) {
     Playback("Воспроизведение"),
     View("Вид"),
     Menu("Меню"),
-    Axes("Оси геймпада и стики"),
 }
 
 /**
@@ -29,6 +28,7 @@ enum class RemoteAction(
     Back("Назад / закрыть меню", ActionGroup.Main, false, KeyEvent.KEYCODE_BACK),
     Controls("Полоска → меню → скрыть", ActionGroup.Main, false, KeyEvent.KEYCODE_MENU),
 
+    AxisSeek("Перемотка стиком — чем сильнее отклонение, тем быстрее", ActionGroup.Playback, true),
     PlayPause("Пауза / воспроизведение", ActionGroup.Playback, false, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE),
     SeekBack("Назад на 10 с", ActionGroup.Playback),
     SeekForward("Вперёд на 10 с", ActionGroup.Playback),
@@ -39,10 +39,14 @@ enum class RemoteAction(
     VolumeUp("Громче", ActionGroup.Playback),
     VolumeDown("Тише", ActionGroup.Playback),
 
+    AxisZoom("Приближение стиком — плавно", ActionGroup.View, true),
     Recenter("Рецентр", ActionGroup.View),
     ZoomIn("Приблизить", ActionGroup.View),
     ZoomOut("Отдалить", ActionGroup.View),
 
+    AxisScroll("Прокрутка меню стиком", ActionGroup.Menu, true),
+    AxisNavHorizontal("Влево / вправо по меню стиком", ActionGroup.Menu, true),
+    AxisNavVertical("Вверх / вниз по меню стиком", ActionGroup.Menu, true),
     NavUp("Вверх по меню", ActionGroup.Menu),
     NavDown("Вниз по меню", ActionGroup.Menu),
     NavLeft("Влево по меню", ActionGroup.Menu),
@@ -51,11 +55,6 @@ enum class RemoteAction(
     ScrollUp("Прокрутить меню вверх", ActionGroup.Menu),
     ScrollDown("Прокрутить меню вниз", ActionGroup.Menu),
 
-    AxisScroll("Прокрутка меню", ActionGroup.Axes, true),
-    AxisSeek("Перемотка — чем сильнее отклонение, тем быстрее", ActionGroup.Axes, true),
-    AxisZoom("Приближение — плавно", ActionGroup.Axes, true),
-    AxisNavHorizontal("Влево / вправо по меню", ActionGroup.Axes, true),
-    AxisNavVertical("Вверх / вниз по меню", ActionGroup.Axes, true),
     ;
 
     val defaultKeys: Set<Int> = defaults.toSet()
