@@ -197,11 +197,13 @@ class PlayerActivity : ComponentActivity() {
         uiHost = VrUiHost(this, screenOverlay) { VrMenu(menu, menuActions) }
         updateModeButton()
 
+        // «Назад» закрывает меню и полоску, но не выходит из VR: выход — только крестиком, пальцем.
+        // В 2D без видео и с открытыми файлами «Назад» выходит, как в обычном приложении.
         onBackPressedDispatcher.addCallback(this) {
             when {
-                menu.title == null -> finish()
                 uiHost.place == VrUiHost.Place.Hidden -> showControls()
-                else -> hideMenu()
+                menu.title != null -> hideMenu()
+                !stereoMode -> finish()
             }
         }
 
@@ -578,7 +580,6 @@ class PlayerActivity : ComponentActivity() {
             RemoteAction.VolumeUp -> volume(AudioManager.ADJUST_RAISE)
             RemoteAction.VolumeDown -> volume(AudioManager.ADJUST_LOWER)
             RemoteAction.Recenter -> renderer.recenter()
-            RemoteAction.ToggleStereo -> toggleStereoMode()
             RemoteAction.NavUp -> navKey(KeyEvent.KEYCODE_DPAD_UP)
             RemoteAction.NavDown -> navKey(KeyEvent.KEYCODE_DPAD_DOWN)
             RemoteAction.NavLeft -> navKey(KeyEvent.KEYCODE_DPAD_LEFT)
@@ -613,11 +614,15 @@ class PlayerActivity : ComponentActivity() {
 
     // --- Пульт и геймпад: оси и колесо мыши ------------------------------------------------
 
-    /** Последние значения осей устройства. */
+    /** Последние значения осей. Геймпад присылает события только при движении — поэтому храним. */
     private val axisValues = HashMap<Int, Float>()
 
-    /** Положение покоя осей на момент начала назначения: так курки, лежащие на −1, не назначатся сами. */
+    /** Положение покоя на момент начала назначения: снимок до первого движения. */
     private var captureBaseline: Map<Int, Float>? = null
+
+    /** Оси, нажатые как кнопки; только что назначенные не срабатывают, пока их не отпустят. */
+    private val axisPressed = HashSet<AxisBinding>()
+    private val axisSuppressed = HashSet<AxisBinding>()
     private var navX = 0
     private var navY = 0
 
@@ -632,25 +637,37 @@ class PlayerActivity : ComponentActivity() {
         }
 
         val ranges = event.device?.motionRanges.orEmpty().filter { it.isFromSource(InputDevice.SOURCE_JOYSTICK) }
+        // Покой оси, которая ещё не двигалась: у курков (0..1) — 0, у стиков (−1..1) — середина.
+        val rest = ranges.associate { it.axis to (axisValues[it.axis] ?: if (it.min >= -0.01f) it.min else 0f) }
         val values = ranges.associate { it.axis to event.getAxisValue(it.axis) }
-        val strongest = values.maxByOrNull { abs(it.value) }
-        if (strongest != null && abs(strongest.value) > 0.5f) {
+
+        val strongest = values.maxByOrNull { abs(it.value - (rest[it.key] ?: 0f)) }
+        if (strongest != null && abs(strongest.value - (rest[strongest.key] ?: 0f)) > 0.5f) {
             menu.lastKey = "${MotionEvent.axisToString(strongest.key).removePrefix("AXIS_")} " +
                 "${"%+.1f".format(strongest.value)} · ${event.device?.name ?: "?"}"
         }
 
         val capturing = menu.capturingKey
-        if (capturing?.isAxis == true) {
-            val baseline = captureBaseline ?: values.also { captureBaseline = it }
-            val moved = values.maxByOrNull { abs(it.value - (baseline[it.key] ?: 0f)) }
-            if (moved != null) {
-                val delta = moved.value - (baseline[moved.key] ?: 0f)
-                if (abs(delta) > CAPTURE_THRESHOLD) {
-                    val rest = (baseline[moved.key] ?: 0f).let { if (abs(it) > 0.8f) it.toInt().coerceIn(-1, 1) else 0 }
-                    settings.keys.assignAxis(capturing, AxisBinding(moved.key, inverted = delta < 0, rest = rest))
-                    menu.capturingKey = null
-                    captureBaseline = null
+        if (capturing != null) {
+            val baseline = captureBaseline ?: rest.also { captureBaseline = it }
+            axisValues.putAll(values)
+            val moved = values.maxByOrNull { abs(it.value - (baseline[it.key] ?: 0f)) } ?: return true
+            val delta = moved.value - (baseline[moved.key] ?: 0f)
+            if (abs(delta) > CAPTURE_THRESHOLD) {
+                val restValue = baseline[moved.key] ?: 0f
+                val binding = AxisBinding(
+                    axis = moved.key,
+                    inverted = delta < 0,
+                    rest = if (abs(restValue) > 0.8f) restValue.toInt().coerceIn(-1, 1) else 0,
+                )
+                settings.keys.assignAxis(capturing, binding)
+                // Ось сейчас отклонена: пусть сначала вернётся в покой, иначе действие сработало бы сразу.
+                if (!capturing.isAxis) {
+                    axisPressed += binding
+                    axisSuppressed += binding
                 }
+                menu.capturingKey = null
+                captureBaseline = null
             }
             return true
         }
@@ -668,6 +685,19 @@ class PlayerActivity : ComponentActivity() {
             .maxByOrNull { abs(it) } ?: 0f
 
     private fun updateAxes() {
+        // Оси на кнопочных действиях (например, курок на «Нажатии») — как кнопка, с запасом от дребезга.
+        settings.keys.axisBindings().filter { !it.first.isAxis }.forEach { (action, binding) ->
+            val value = binding.valueOf(axisValues[binding.axis] ?: binding.rest.toFloat())
+            val pressed = binding in axisPressed
+            if (!pressed && value > AXIS_PRESS) {
+                axisPressed += binding
+                if (binding !in axisSuppressed) axisButton(action, down = true)
+            } else if (pressed && value < AXIS_RELEASE) {
+                axisPressed -= binding
+                if (!axisSuppressed.remove(binding)) axisButton(action, down = false)
+            }
+        }
+
         // Стрелки меню — по одному шагу на отклонение.
         val x = direction(axisValue(RemoteAction.AxisNavHorizontal))
         if (x != navX) {
@@ -683,6 +713,15 @@ class PlayerActivity : ComponentActivity() {
         handler.removeCallbacks(axisTick)
         if (abs(axisValue(RemoteAction.AxisScroll)) > DEAD_ZONE || abs(axisValue(RemoteAction.AxisSeek)) > DEAD_ZONE) {
             handler.post(axisTick)
+        }
+    }
+
+    private fun axisButton(action: RemoteAction, down: Boolean) {
+        val now = SystemClock.uptimeMillis()
+        if (action == RemoteAction.Click) {
+            if (down) triggerDown(now) else triggerUp(now, cancelled = false)
+        } else if (down) {
+            perform(action)
         }
     }
 
@@ -772,6 +811,8 @@ class PlayerActivity : ComponentActivity() {
         private const val DEAD_ZONE = 0.2f
         private const val NAV_THRESHOLD = 0.6f
         private const val CAPTURE_THRESHOLD = 0.6f
+        private const val AXIS_PRESS = 0.6f
+        private const val AXIS_RELEASE = 0.3f
         private const val AXIS_TICK_MS = 50L
         private const val AXIS_SCROLL_PER_TICK = 0.6f
         /** При полном отклонении — около 20 секунд видео за секунду. */

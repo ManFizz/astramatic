@@ -204,9 +204,8 @@ private fun ControlsBar(state: VrMenuState, actions: VrMenuActions) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 TextButton(onClick = actions::recenter, contentPadding = compact) { Text("Центр") }
-                TextButton(onClick = actions::toggleStereo, contentPadding = compact) {
-                    Text(if (state.stereo) "2D" else "VR")
-                }
+                // Из шлема 2D не включается: только пальцем, кнопкой на экране (как крестик).
+                if (!state.stereo) TextButton(onClick = actions::toggleStereo, contentPadding = compact) { Text("VR") }
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 TextButton(onClick = actions::previousFile, enabled = state.hasPrevious, contentPadding = compact) { Text("⏮") }
@@ -247,9 +246,12 @@ private fun MenuContent(state: VrMenuState, actions: VrMenuActions) {
                 TabChip(state, VrMenuState.Tab.Remote, "🎮 Пульт")
                 TabChip(state, VrMenuState.Tab.Settings, "⚙ Настройки")
             }
-            OutlinedButton(onClick = actions::toggleStereo) { Text(if (state.stereo) "2D" else "VR") }
             if (state.title != null) Button(onClick = actions::hide) { Text("К видео") }
-            TextButton(onClick = actions::exit) { Text("Выход") }
+            // Выйти из VR и включить 2D можно только пальцем — крестиком и кнопкой на экране.
+            if (!state.stereo) {
+                OutlinedButton(onClick = actions::toggleStereo) { Text("VR") }
+                TextButton(onClick = actions::exit) { Text("Выход") }
+            }
         }
         HorizontalDivider()
         Box(Modifier.fillMaxWidth().weight(1f)) {

@@ -40,7 +40,6 @@ enum class RemoteAction(
     VolumeDown("Тише", ActionGroup.Playback),
 
     Recenter("Рецентр", ActionGroup.View),
-    ToggleStereo("2D / VR", ActionGroup.View),
 
     NavUp("Вверх по меню", ActionGroup.Menu),
     NavDown("Вниз по меню", ActionGroup.Menu),
@@ -93,10 +92,13 @@ class KeyBindings(private val prefs: SharedPreferences) {
     private val axes = mutableStateMapOf<RemoteAction, Set<AxisBinding>>()
 
     init {
-        // Версия схемы: прошлые назначения были по старым умолчаниям, начинаем с чистого листа.
-        if (prefs.getInt(SCHEMA_KEY, 0) < SCHEMA) {
+        // Версии схемы: 2 — старые умолчания сброшены; 3 — оси, назначенные с неверным покоем, сброшены.
+        val schema = prefs.getInt(SCHEMA_KEY, 0)
+        if (schema < SCHEMA) {
             prefs.edit().apply {
-                prefs.all.keys.filter { it.startsWith("key_") || it.startsWith("axis_") }.forEach(::remove)
+                prefs.all.keys
+                    .filter { (schema < 2 && it.startsWith("key_")) || it.startsWith("axis_") }
+                    .forEach(::remove)
                 putInt(SCHEMA_KEY, SCHEMA)
             }.apply()
         }
@@ -164,7 +166,7 @@ class KeyBindings(private val prefs: SharedPreferences) {
 
     companion object {
         private const val SCHEMA_KEY = "bindings_schema"
-        private const val SCHEMA = 2
+        private const val SCHEMA = 3
 
         fun keyName(keyCode: Int): String = KeyEvent.keyCodeToString(keyCode).removePrefix("KEYCODE_")
     }

@@ -108,8 +108,7 @@ fun RemoteScreen(state: VrMenuState) {
             Surface(color = MaterialTheme.colorScheme.tertiaryContainer, shape = MaterialTheme.shapes.medium) {
                 Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        if (capturing.isAxis) "Отклоните стик или нажмите курок для «${capturing.title}»…"
-                        else "Нажмите кнопку на пульте для «${capturing.title}»…",
+                        "«${capturing.title}»: ${captureHint(capturing)}",
                         modifier = Modifier.weight(1f),
                         color = MaterialTheme.colorScheme.onTertiaryContainer,
                     )
@@ -169,6 +168,13 @@ private fun BindingRow(action: RemoteAction, bindings: KeyBindings, onAdd: () ->
                 }
             }
         }
-        TextButton(onClick = onAdd) { Text(if (action.isAxis) "+ Ось" else "+ Кнопка") }
+        TextButton(onClick = onAdd) { Text(if (action.isAxis) "+ Ось" else "+ Назначить") }
     }
+}
+
+/** Что сделать при назначении. Направление важно: так определяется, куда ось работает «вперёд». */
+private fun captureHint(action: RemoteAction): String = when (action) {
+    RemoteAction.AxisScroll, RemoteAction.AxisNavVertical -> "отклоните стик ВНИЗ…"
+    RemoteAction.AxisSeek, RemoteAction.AxisNavHorizontal -> "отклоните стик ВПРАВО (вперёд)…"
+    else -> "нажмите кнопку или курок…"
 }
