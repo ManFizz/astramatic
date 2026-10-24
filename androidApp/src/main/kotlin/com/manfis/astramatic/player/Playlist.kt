@@ -2,9 +2,16 @@ package com.manfis.astramatic.player
 
 import android.content.Context
 import android.net.Uri
+import com.manfis.astramatic.library.DarkframeRef
 import com.manfis.astramatic.model.VideoFormat
 
-data class PlaylistItem(val uri: Uri, val title: String, val format: VideoFormat)
+data class PlaylistItem(
+    val uri: Uri,
+    val title: String,
+    val format: VideoFormat,
+    /** Видео из Darkframe: позиция просмотра хранится там же, где у Darkframe. */
+    val darkframe: DarkframeRef? = null,
+)
 
 /** Видео папки, из которой открыли файл: для «следующий / предыдущий» и автоперехода. */
 data class Playlist(val items: List<PlaylistItem>, val index: Int) {

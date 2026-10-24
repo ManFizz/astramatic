@@ -11,8 +11,10 @@ import androidx.media3.datasource.BaseDataSource
 import androidx.media3.datasource.DataSource
 import androidx.media3.datasource.DataSpec
 import androidx.media3.datasource.DefaultDataSource
+import androidx.media3.datasource.ResolvingDataSource
 import androidx.media3.datasource.TransferListener
 import com.hierynomus.smbj.share.File
+import com.manfis.astramatic.library.DarkframeStore
 import com.manfis.astramatic.library.SmbConnections
 import com.manfis.astramatic.library.SmbServerStore
 import com.manfis.astramatic.library.SmbUris
@@ -57,8 +59,16 @@ class AppDataSource private constructor(
         private val context = context.applicationContext
         private val servers = SmbServerStore(context)
 
-        override fun createDataSource(): DataSource =
-            AppDataSource(SmbDataSource(servers), DefaultDataSource.Factory(context).createDataSource())
+        private val darkframes = DarkframeStore(context)
+
+        override fun createDataSource(): DataSource {
+            // Darkframe пускает к файлам только подключённое устройство: прикладываем его токен.
+            val withAuth = ResolvingDataSource.Factory(DefaultDataSource.Factory(context)) { spec ->
+                val token = darkframes.tokenFor(spec.uri.authority)
+                if (token == null) spec else spec.withAdditionalHeaders(mapOf("Authorization" to "Bearer $token"))
+            }
+            return AppDataSource(SmbDataSource(servers), withAuth.createDataSource())
+        }
     }
 }
 

@@ -42,6 +42,9 @@ import com.manfis.astramatic.ui.VrMenuState
 import com.manfis.astramatic.settings.AppSettings
 import com.manfis.astramatic.settings.RemoteAction
 import kotlin.math.hypot
+import com.manfis.astramatic.library.DarkframeClient
+import com.manfis.astramatic.library.DarkframeStore
+import java.util.concurrent.Executors
 import kotlin.math.abs
 
 /**
@@ -61,6 +64,10 @@ class PlayerActivity : ComponentActivity() {
     private val settings by lazy { AppSettings.get(this) }
     private val positions by lazy { ResumePositions(this) }
     private val formats by lazy { FormatMemory(this) }
+    private val darkframes by lazy { DarkframeStore(this) }
+
+    /** Сеть (позиции в Darkframe) — не на главном потоке, по одному запросу за раз. */
+    private val io = Executors.newSingleThreadExecutor()
     private var playlist: Playlist? = null
 
     private val prefs by lazy { getSharedPreferences("player", MODE_PRIVATE) }
@@ -213,7 +220,7 @@ class PlayerActivity : ComponentActivity() {
         val item = next.current
         player.setMediaItem(MediaItem.fromUri(item.uri))
         player.prepare()
-        if (settings.resumePlayback) positions.get(item.uri)?.let(player::seekTo)
+        if (settings.resumePlayback) resume(item)
         player.play()
         menu.title = item.title
         menu.hasPrevious = next.hasPrevious
@@ -232,10 +239,30 @@ class PlayerActivity : ComponentActivity() {
         renderer.format = format
     }
 
+    /** У видео из Darkframe позиция общая с Darkframe, у остальных — своя, на телефоне. */
+    private fun resume(item: PlaylistItem) {
+        val ref = item.darkframe
+        if (ref == null) {
+            positions.get(item.uri)?.let(player::seekTo)
+            return
+        }
+        val server = darkframes.get(ref.serverId) ?: return
+        io.execute {
+            val position = runCatching { DarkframeClient.position(server, ref.itemId) }.getOrNull() ?: return@execute
+            runOnUiThread { if (playlist?.current == item) player.seekTo(position) }
+        }
+    }
+
     /** Позиция пишется всегда: включить «продолжать с места» можно и позже. */
     private fun savePosition() {
         val item = playlist?.current ?: return
-        positions.save(item.uri, player.currentPosition, player.duration)
+        val position = player.currentPosition
+        val duration = player.duration
+        positions.save(item.uri, position, duration)
+        val ref = item.darkframe ?: return
+        val server = darkframes.get(ref.serverId) ?: return
+        if (duration <= 0) return
+        io.execute { runCatching { DarkframeClient.savePosition(server, ref.itemId, position, duration) } }
     }
 
     private val saveTick = object : Runnable {
@@ -537,6 +564,7 @@ class PlayerActivity : ComponentActivity() {
         handler.removeCallbacksAndMessages(null)
         if (::uiHost.isInitialized) uiHost.release()
         if (::player.isInitialized) player.release()
+        io.shutdown()
         super.onDestroy()
     }
 

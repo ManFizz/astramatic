@@ -11,7 +11,11 @@ import kotlinx.coroutines.withContext
 sealed interface MediaSourceRef {
     data object Phone : MediaSourceRef
     data class Smb(val serverId: String) : MediaSourceRef
+    data class Darkframe(val serverId: String) : MediaSourceRef
 }
+
+/** Видео из библиотеки Darkframe: позиция просмотра у него общая с Darkframe. */
+data class DarkframeRef(val serverId: String, val itemId: String)
 
 /** Папка или видео. У папки [path] — путь для следующего [MediaLibrary.list], у видео есть [playUri]. */
 data class MediaEntry(
@@ -20,17 +24,25 @@ data class MediaEntry(
     val isDirectory: Boolean,
     val size: Long = 0,
     val playUri: Uri? = null,
+    /** Картинка-превью (URL или content://), если источник её даёт. */
+    val thumbnail: String? = null,
+    /** По этой строке угадывается формат: у Darkframe теги могут быть в имени файла, а не в названии. */
+    val formatHint: String = name,
+    val darkframe: DarkframeRef? = null,
 )
 
 class MediaLibrary(context: Context) {
     private val context = context.applicationContext
     val servers = SmbServerStore(context)
+    val darkframes = DarkframeStore(context)
 
     /** Содержимое папки: сначала папки, затем видео, по алфавиту. Бросает исключение при ошибке сети или доступа. */
     suspend fun list(source: MediaSourceRef, path: String): List<MediaEntry> = withContext(Dispatchers.IO) {
         val entries = when (source) {
             MediaSourceRef.Phone -> listPhone(path)
             is MediaSourceRef.Smb -> listSmb(source.serverId, path)
+            // У Darkframe свой порядок (ручной в коллекциях) — его и держим.
+            is MediaSourceRef.Darkframe -> return@withContext listDarkframe(source.serverId, path)
         }
         entries.sortedWith(compareBy<MediaEntry> { !it.isDirectory }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.name })
     }
@@ -49,6 +61,43 @@ class MediaLibrary(context: Context) {
                     playUri = if (it.isDirectory) null else SmbUris.build(serverId, childPath),
                 )
             }
+    }
+
+    /**
+     * Пути Darkframe: "" — корневые коллекции, `c:<id>` — коллекция, `s:<id>` — умная коллекция,
+     * `none` — видео без коллекции. В список попадают только видео.
+     */
+    private fun listDarkframe(serverId: String, path: String): List<MediaEntry> {
+        val server = darkframes.get(serverId) ?: error("Darkframe удалён из списка")
+        fun folder(c: DarkframeClient.Collection) = MediaEntry(
+            name = c.name,
+            path = if (c.smartFilter != null) "s:${c.id}" else "c:${c.id}",
+            isDirectory = true,
+        )
+        fun video(item: DarkframeClient.Item) = MediaEntry(
+            name = item.displayName,
+            path = item.id,
+            isDirectory = false,
+            size = item.size,
+            playUri = Uri.parse(item.videoUrl),
+            thumbnail = item.thumbUrl,
+            formatHint = "${item.fileName} ${item.title}",
+            darkframe = DarkframeRef(serverId, item.id),
+        )
+        return when {
+            path.isEmpty() -> DarkframeClient.collections(server).filter { it.parentId == null }.map(::folder) +
+                MediaEntry("Без коллекции", "none", isDirectory = true)
+            path == "none" -> DarkframeClient.items(server, null).second.filter { it.isVideo }.map(::video)
+            path.startsWith("s:") -> {
+                val filter = DarkframeClient.collections(server).find { it.id == path.removePrefix("s:") }?.smartFilter
+                    ?: error("Умная коллекция не найдена")
+                DarkframeClient.smartItems(server, filter).filter { it.isVideo }.map(::video)
+            }
+            else -> {
+                val (children, items) = DarkframeClient.items(server, path.removePrefix("c:"))
+                children.map(::folder) + items.filter { it.isVideo }.map(::video)
+            }
+        }
     }
 
     /** Корень — папки, в которых Android нашёл видео; внутри папки — сами видео. */
@@ -85,7 +134,7 @@ class MediaLibrary(context: Context) {
                         isDirectory = false,
                         size = cursor.getLong(sizeCol),
                         playUri = ContentUris.withAppendedId(collection, cursor.getLong(idCol)),
-                    )
+                    ).let { it.copy(thumbnail = it.playUri.toString()) }
                 }
             }
         }

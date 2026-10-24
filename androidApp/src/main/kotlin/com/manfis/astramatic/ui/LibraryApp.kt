@@ -45,6 +45,14 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.manfis.astramatic.headset.HeadsetActivity
+import coil3.compose.AsyncImage
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import com.manfis.astramatic.library.DarkframeRef
+import com.manfis.astramatic.library.DarkframeServer
 import com.manfis.astramatic.library.MediaEntry
 import com.manfis.astramatic.library.MediaLibrary
 import com.manfis.astramatic.library.MediaSourceRef
@@ -66,6 +74,7 @@ internal sealed interface Screen {
     data object Home : Screen
     data class Browse(val source: MediaSourceRef, val path: String, val title: String) : Screen
     data class EditServer(val server: SmbServer?) : Screen
+    data class EditDarkframe(val server: DarkframeServer?) : Screen
 }
 
 /** Где пользователь находится в библиотеке. Вынесено наружу, чтобы переживать переключение вкладок меню. */
@@ -95,13 +104,14 @@ fun LibraryApp(
 
     BackHandler(enabled = backStack.size > 1) { pop() }
 
-    fun item(uri: Uri, name: String) = PlaylistItem(uri, name, VideoFormatDetector.detect(name) ?: defaultFormat)
+    fun item(uri: Uri, name: String, hint: String = name, darkframe: DarkframeRef? = null) =
+        PlaylistItem(uri, name, VideoFormatDetector.detect(hint) ?: defaultFormat, darkframe)
 
     /** Список — все видео той же папки, чтобы работали «следующий / предыдущий». */
     fun play(entry: MediaEntry, folder: List<MediaEntry>) {
         val videos = folder.filter { !it.isDirectory && it.playUri != null }
         val index = videos.indexOf(entry).takeIf { it >= 0 } ?: return
-        onPlay(Playlist(videos.map { item(it.playUri!!, it.name) }, index))
+        onPlay(Playlist(videos.map { item(it.playUri!!, it.name, it.formatHint, it.darkframe) }, index))
     }
 
     when (val screen = backStack.last()) {
@@ -116,6 +126,7 @@ fun LibraryApp(
             },
             onOpen = { source, title -> push(Screen.Browse(source, "", title)) },
             onEditServer = { push(Screen.EditServer(it)) },
+            onEditDarkframe = { push(Screen.EditDarkframe(it)) },
             onPickFile = { uri, name -> onPlay(Playlist.single(item(uri, name))) },
         )
 
@@ -141,6 +152,19 @@ fun LibraryApp(
             },
             onCancel = ::pop,
         )
+
+        is Screen.EditDarkframe -> DarkframeScreen(
+            initial = screen.server,
+            onSave = {
+                library.darkframes.save(it)
+                pop()
+            },
+            onDelete = {
+                library.darkframes.delete(it.id)
+                pop()
+            },
+            onCancel = ::pop,
+        )
     }
 }
 
@@ -153,10 +177,12 @@ private fun HomeScreen(
     onDefaultFormat: (VideoFormat) -> Unit,
     onOpen: (MediaSourceRef, String) -> Unit,
     onEditServer: (SmbServer?) -> Unit,
+    onEditDarkframe: (DarkframeServer?) -> Unit,
     onPickFile: (Uri, String) -> Unit,
 ) {
     val context = LocalContext.current
     val servers = remember { library.servers.all() }
+    val darkframes = remember { library.darkframes.all() }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) {
             runCatching {
@@ -179,9 +205,15 @@ private fun HomeScreen(
                 onOpen(MediaSourceRef.Smb(server.id), server.title)
             }
         }
+        darkframes.forEach { server ->
+            SourceRow("🖼", server.name, "Darkframe · ${server.authority}", onEdit = { onEditDarkframe(server) }.takeIf { allowEditing }) {
+                onOpen(MediaSourceRef.Darkframe(server.id), server.name)
+            }
+        }
         if (allowEditing) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 OutlinedButton(onClick = { onEditServer(null) }) { Text("+ Компьютер (SMB)") }
+                OutlinedButton(onClick = { onEditDarkframe(null) }) { Text("+ Darkframe") }
                 OutlinedButton(onClick = { picker.launch(arrayOf("video/*")) }) { Text("Открыть файл…") }
             }
         } else {
@@ -321,11 +353,20 @@ private fun BrowseScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                     ) {
-                        Text(if (entry.isDirectory) "📁" else "🎬", style = MaterialTheme.typography.titleLarge)
+                        if (entry.thumbnail != null) {
+                            AsyncImage(
+                                model = entry.thumbnail,
+                                contentDescription = null,
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.size(width = 96.dp, height = 54.dp).clip(RoundedCornerShape(6.dp)),
+                            )
+                        } else {
+                            Text(if (entry.isDirectory) "📁" else "🎬", style = MaterialTheme.typography.titleLarge)
+                        }
                         Column(Modifier.weight(1f)) {
                             Text(entry.name, maxLines = 2, overflow = TextOverflow.Ellipsis)
                             if (!entry.isDirectory) {
-                                val format = VideoFormatDetector.detect(entry.name)
+                                val format = VideoFormatDetector.detect(entry.formatHint)
                                 val details = listOfNotNull(
                                     formatSize(entry.size).takeIf { entry.size > 0 },
                                     format?.let { "${projectionLabel(it.projection)} ${stereoLabel(it.stereo)}" },
