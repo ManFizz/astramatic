@@ -3,6 +3,7 @@ package com.manfis.astramatic.library
 import android.content.Context
 import android.net.Uri
 import android.os.Build
+import com.manfis.astramatic.remote.VideoFiles
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
@@ -79,7 +80,8 @@ object DarkframeClient {
         val videoUrl: String,
         val thumbUrl: String,
     ) {
-        val isVideo: Boolean get() = mimeType.startsWith("video/") || MediaLibrary.isVideo(fileName)
+        val isVideo: Boolean get() = mimeType.startsWith("video/") || (mimeType.isEmpty() && VideoFiles.isVideo(fileName))
+        val isImage: Boolean get() = mimeType.startsWith("image/") || (mimeType.isEmpty() && VideoFiles.isImage(fileName))
         val displayName: String get() = title.ifBlank { fileName }
     }
 

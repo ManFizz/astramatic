@@ -67,6 +67,8 @@ import com.manfis.astramatic.player.PlayerActivity
 import com.manfis.astramatic.settings.SettingsActivity
 import com.manfis.astramatic.player.Playlist
 import com.manfis.astramatic.player.PlaylistItem
+import com.manfis.astramatic.remote.VideoFiles
+import com.manfis.astramatic.settings.AppSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.UUID
@@ -99,21 +101,22 @@ fun LibraryApp(
     val context = LocalContext.current
     val library = remember { MediaLibrary(context) }
     val backStack = state.backStack
-    var defaultFormat by remember { mutableStateOf(DefaultFormat.load(context)) }
 
     fun push(screen: Screen) = backStack.add(screen)
     fun pop() = backStack.removeAt(backStack.lastIndex)
 
     BackHandler(enabled = backStack.size > 1) { pop() }
 
-    fun item(uri: Uri, name: String, hint: String = name, darkframe: DarkframeRef? = null) =
-        PlaylistItem(uri, name, VideoFormatDetector.detect(hint) ?: defaultFormat, darkframe)
+    fun item(uri: Uri, name: String, image: Boolean, hint: String = name, darkframe: DarkframeRef? = null) =
+        PlaylistItem(
+            uri, name, VideoFormatDetector.detect(hint) ?: DefaultFormat.forFile(context, image), darkframe, isImage = image,
+        )
 
-    /** Список — все видео той же папки, чтобы работали «следующий / предыдущий». */
+    /** Список — все видео и фото той же папки, чтобы работали «следующий / предыдущий». */
     fun play(entry: MediaEntry, folder: List<MediaEntry>) {
-        val videos = folder.filter { !it.isDirectory && it.playUri != null }
-        val index = videos.indexOf(entry).takeIf { it >= 0 } ?: return
-        onPlay(Playlist(videos.map { item(it.playUri!!, it.name, it.formatHint, it.darkframe) }, index))
+        val files = folder.filter { !it.isDirectory && it.playUri != null }
+        val index = files.indexOf(entry).takeIf { it >= 0 } ?: return
+        onPlay(Playlist(files.map { item(it.playUri!!, it.name, it.isImage, it.formatHint, it.darkframe) }, index))
     }
 
     when (val screen = backStack.last()) {
@@ -121,16 +124,11 @@ fun LibraryApp(
             library = library,
             embedded = embedded,
             allowEditing = allowEditing,
-            defaultFormat = defaultFormat,
-            onDefaultFormat = {
-                defaultFormat = it
-                DefaultFormat.save(context, it)
-            },
             onOpen = { source, title -> push(Screen.Browse(source, "", title)) },
             onEditServer = { push(Screen.EditServer(it)) },
             onEditDarkframe = { push(Screen.EditDarkframe(it)) },
             onEditDesktop = { push(Screen.EditDesktop(it)) },
-            onPickFile = { uri, name -> onPlay(Playlist.single(item(uri, name))) },
+            onPickFile = { uri, name -> onPlay(Playlist.single(item(uri, name, VideoFiles.isImage(name)))) },
         )
 
         is Screen.Browse -> BrowseScreen(
@@ -189,8 +187,6 @@ private fun HomeScreen(
     library: MediaLibrary,
     embedded: Boolean,
     allowEditing: Boolean,
-    defaultFormat: VideoFormat,
-    onDefaultFormat: (VideoFormat) -> Unit,
     onOpen: (MediaSourceRef, String) -> Unit,
     onEditServer: (SmbServer?) -> Unit,
     onEditDarkframe: (DarkframeServer?) -> Unit,
@@ -217,7 +213,7 @@ private fun HomeScreen(
         if (!embedded) Text("AstraMatic", style = MaterialTheme.typography.headlineMedium)
 
         Text("Источники", style = MaterialTheme.typography.titleMedium)
-        SourceRow("📱", "Видео на телефоне", null) { onOpen(MediaSourceRef.Phone, "Телефон") }
+        SourceRow("📱", "Видео и фото на телефоне", null) { onOpen(MediaSourceRef.Phone, "Телефон") }
         servers.forEach { server ->
             SourceRow("🖥", server.title, "${server.host}\\${server.share}", onEdit = { onEditServer(server) }.takeIf { allowEditing }) {
                 onOpen(MediaSourceRef.Smb(server.id), server.title)
@@ -238,7 +234,7 @@ private fun HomeScreen(
                 OutlinedButton(onClick = { onEditDesktop(null) }) { Text("+ Компьютер (AstraMatic)") }
                 OutlinedButton(onClick = { onEditServer(null) }) { Text("+ Папка Windows (SMB)") }
                 OutlinedButton(onClick = { onEditDarkframe(null) }) { Text("+ Darkframe") }
-                OutlinedButton(onClick = { picker.launch(arrayOf("video/*")) }) { Text("Открыть файл…") }
+                OutlinedButton(onClick = { picker.launch(arrayOf("video/*", "image/*")) }) { Text("Открыть файл…") }
             }
         } else {
             Text(
@@ -248,18 +244,6 @@ private fun HomeScreen(
         }
 
         HorizontalDivider(Modifier.padding(vertical = 8.dp))
-
-        Text("Формат, если не распознан по имени файла", style = MaterialTheme.typography.titleMedium)
-        Text(
-            "Теги в имени вроде _180_LR, _360, _TB, _3dh определяются автоматически.",
-            style = MaterialTheme.typography.bodySmall,
-        )
-        OptionRow(Projection.entries, defaultFormat.projection, ::projectionLabel) {
-            onDefaultFormat(defaultFormat.copy(projection = it))
-        }
-        OptionRow(StereoLayout.entries, defaultFormat.stereo, ::stereoLabel) {
-            onDefaultFormat(defaultFormat.copy(stereo = it))
-        }
 
         if (embedded) return@Column
 
@@ -315,16 +299,17 @@ private fun BrowseScreen(
     var reload by remember { mutableIntStateOf(0) }
     var permissionAsked by remember { mutableStateOf(false) }
 
-    val needsPermission = screen.source == MediaSourceRef.Phone &&
-        ContextCompat.checkSelfPermission(context, Manifest.permission.READ_MEDIA_VIDEO) != PackageManager.PERMISSION_GRANTED
-    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { reload++ }
+    val needsPermission = screen.source == MediaSourceRef.Phone && MEDIA_PERMISSIONS.any {
+        ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED
+    }
+    val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { reload++ }
 
     LaunchedEffect(screen, reload) {
         if (needsPermission) {
             // Спрашиваем сами только один раз, иначе при «Запретить» диалог бы зациклился.
             if (!permissionAsked) {
                 permissionAsked = true
-                permission.launch(Manifest.permission.READ_MEDIA_VIDEO)
+                permission.launch(MEDIA_PERMISSIONS)
             }
             return@LaunchedEffect
         }
@@ -355,8 +340,8 @@ private fun BrowseScreen(
 
         val list = entries
         when {
-            needsPermission -> CenterMessage("Нужен доступ к видео на телефоне.") {
-                Button(onClick = { permission.launch(Manifest.permission.READ_MEDIA_VIDEO) }) { Text("Разрешить") }
+            needsPermission -> CenterMessage("Нужен доступ к видео и фото на телефоне.") {
+                Button(onClick = { permission.launch(MEDIA_PERMISSIONS) }) { Text("Разрешить") }
             }
 
             error != null -> CenterMessage(error!!) {
@@ -365,7 +350,7 @@ private fun BrowseScreen(
 
             list == null -> CenterMessage("Загрузка…") { CircularProgressIndicator() }
 
-            list.isEmpty() -> CenterMessage("Здесь нет папок и видео.") {}
+            list.isEmpty() -> CenterMessage("Здесь нет папок, видео и фото.") {}
 
             else -> LazyColumn(Modifier.fillMaxSize()) {
                 items(list, key = { it.path }) { entry ->
@@ -385,7 +370,14 @@ private fun BrowseScreen(
                                 modifier = Modifier.size(width = 96.dp, height = 54.dp).clip(RoundedCornerShape(6.dp)),
                             )
                         } else {
-                            Text(if (entry.isDirectory) "📁" else "🎬", style = MaterialTheme.typography.titleLarge)
+                            Text(
+                                when {
+                                    entry.isDirectory -> "📁"
+                                    entry.isImage -> "🖼"
+                                    else -> "🎬"
+                                },
+                                style = MaterialTheme.typography.titleLarge,
+                            )
                         }
                         Column(Modifier.weight(1f)) {
                             Text(entry.name, maxLines = 2, overflow = TextOverflow.Ellipsis)
@@ -576,23 +568,12 @@ private fun displayName(context: Context, uri: Uri): String =
         ?.use { if (it.moveToFirst()) it.getString(0) else null }
         ?: uri.lastPathSegment ?: ""
 
-/** Формат по умолчанию для файлов без тегов в имени. */
+private val MEDIA_PERMISSIONS = arrayOf(Manifest.permission.READ_MEDIA_VIDEO, Manifest.permission.READ_MEDIA_IMAGES)
+
+/** Формат файлов без тегов в имени: свой для видео и для фото (меняется в «Настройках»). */
 internal object DefaultFormat {
-    private const val PREFS = "library"
-
-    fun load(context: Context): VideoFormat {
-        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-        val default = VideoFormat()
-        return VideoFormat(
-            projection = Projection.entries.find { it.name == prefs.getString("projection", null) } ?: default.projection,
-            stereo = StereoLayout.entries.find { it.name == prefs.getString("stereo", null) } ?: default.stereo,
-        )
-    }
-
-    fun save(context: Context, format: VideoFormat) {
-        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
-            .putString("projection", format.projection.name)
-            .putString("stereo", format.stereo.name)
-            .apply()
+    fun forFile(context: Context, image: Boolean): VideoFormat {
+        val settings = AppSettings.get(context)
+        return VideoFormat.decode(if (image) settings.defaultImageFormat else settings.defaultVideoFormat) ?: VideoFormat()
     }
 }

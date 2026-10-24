@@ -11,6 +11,8 @@ data class PlaylistItem(
     val format: VideoFormat,
     /** Видео из Darkframe: позиция просмотра хранится там же, где у Darkframe. */
     val darkframe: DarkframeRef? = null,
+    /** Фото: показывается кадром, без перемотки. */
+    val isImage: Boolean = false,
 )
 
 /** Видео папки, из которой открыли файл: для «следующий / предыдущий» и автоперехода. */

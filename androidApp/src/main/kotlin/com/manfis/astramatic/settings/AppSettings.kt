@@ -27,8 +27,27 @@ class AppSettings private constructor(private val prefs: SharedPreferences) {
     var screenHeight by pref("screen_height", 2f)
     var screenDistance by pref("screen_distance", 3f)
 
-    /** Комната вокруг плоского экрана подсвечивается цветом кадра. */
-    var ambientLight by pref("ambient_light", false)
+    /** Изгиб плоского экрана: 0 — плоский, 1 — дуга вокруг зрителя. */
+    var screenCurve by pref("screen_curve", 0f)
+
+    /** Что вокруг: имя [com.manfis.astramatic.player.Environment]. */
+    var environment by pref("environment", "Cinema")
+
+    /** В кинозале стены подсвечиваются цветом кадра. */
+    var ambientLight by pref("ambient_light", true)
+
+    /** Яркость видео и фото, 0.5..1.5. */
+    var brightness by pref("brightness", 1f)
+
+    /** Режим «лёжа»: рецентр поворачивает картинку и вверх-вниз, туда же ставится меню. */
+    var recenterPitch by pref("recenter_pitch", false)
+
+    /** Слайд-шоу фото: секунд на кадр, 0 — выключено. */
+    var slideshowSeconds by pref("slideshow_seconds", 0)
+
+    /** Формат файлов без тегов в имени, [com.manfis.astramatic.model.VideoFormat.encode]. */
+    var defaultVideoFormat by pref("default_video_format", "Dome180|SideBySide|180|0")
+    var defaultImageFormat by pref("default_image_format", "Flat|Mono|180|0")
 
     val keys = KeyBindings(prefs)
 

@@ -4,6 +4,7 @@ import android.content.ContentUris
 import android.content.Context
 import android.net.Uri
 import android.provider.MediaStore
+import com.manfis.astramatic.remote.VideoFiles
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -18,18 +19,19 @@ sealed interface MediaSourceRef {
 /** Видео из библиотеки Darkframe: позиция просмотра у него общая с Darkframe. */
 data class DarkframeRef(val serverId: String, val itemId: String)
 
-/** Папка или видео. У папки [path] — путь для следующего [MediaLibrary.list], у видео есть [playUri]. */
+/** Папка, видео или фото. У папки [path] — путь для следующего [MediaLibrary.list], у файла есть [playUri]. */
 data class MediaEntry(
     val name: String,
     val path: String,
     val isDirectory: Boolean,
     val size: Long = 0,
     val playUri: Uri? = null,
-    /** Картинка-превью (URL или content://), если источник её даёт. */
+    /** Картинка-превью (URL, content:// или особая схема для SMB), если источник её даёт. */
     val thumbnail: String? = null,
     /** По этой строке угадывается формат: у Darkframe теги могут быть в имени файла, а не в названии. */
     val formatHint: String = name,
     val darkframe: DarkframeRef? = null,
+    val isImage: Boolean = false,
 )
 
 class MediaLibrary(context: Context) {
@@ -38,7 +40,7 @@ class MediaLibrary(context: Context) {
     val darkframes = DarkframeStore(context)
     val desktops = DesktopStore(context)
 
-    /** Содержимое папки: сначала папки, затем видео, по алфавиту. Бросает исключение при ошибке сети или доступа. */
+    /** Содержимое папки: сначала папки, затем файлы, по алфавиту. Бросает исключение при ошибке сети или доступа. */
     suspend fun list(source: MediaSourceRef, path: String): List<MediaEntry> = withContext(Dispatchers.IO) {
         val entries = when (source) {
             MediaSourceRef.Phone -> listPhone(path)
@@ -54,16 +56,21 @@ class MediaLibrary(context: Context) {
     private fun listSmb(serverId: String, path: String): List<MediaEntry> {
         val server = servers.get(serverId) ?: error("Компьютер удалён из списка")
         return SmbConnections.list(server, path)
-            .filter { it.isDirectory || isVideo(it.name) }
+            .filter { it.isDirectory || VideoFiles.isMedia(it.name) }
             .map {
                 val childPath = if (path.isEmpty()) it.name else "$path/${it.name}"
+                val image = VideoFiles.isImage(it.name)
+                val playUri = if (it.isDirectory) null else SmbUris.build(serverId, childPath)
                 MediaEntry(
                     name = it.name,
                     path = childPath,
                     isDirectory = it.isDirectory,
                     size = it.size,
-                    playUri = if (it.isDirectory) null else SmbUris.build(serverId, childPath),
-                ).let { entry -> entry.copy(thumbnail = entry.playUri?.toString()) }
+                    playUri = playUri,
+                    // Фото целиком по сети ради превью не тянем каждый раз: уменьшенная копия кешируется.
+                    thumbnail = playUri?.let { uri -> if (image) "${SmbThumbnailFetcher.SMB_THUMB_SCHEME}:$uri" else uri.toString() },
+                    isImage = image,
+                )
             }
     }
 
@@ -77,20 +84,22 @@ class MediaLibrary(context: Context) {
         val inner = path.substringAfter('/', "")
         return DesktopClient.list(server, folderId, inner).map {
             val playUri = if (it.isDirectory) null else server.fileUri(folderId, it.path)
+            val image = VideoFiles.isImage(it.name)
             MediaEntry(
                 name = it.name,
                 path = "$folderId/${it.path}",
                 isDirectory = it.isDirectory,
                 size = it.size,
                 playUri = playUri,
-                thumbnail = playUri?.let { uri -> "${SmbThumbnailFetcher.HTTP_VIDEO_SCHEME}:$uri" },
+                thumbnail = playUri?.let { uri -> if (image) uri.toString() else "${SmbThumbnailFetcher.HTTP_VIDEO_SCHEME}:$uri" },
+                isImage = image,
             )
         }
     }
 
     /**
      * Пути Darkframe: "" — корневые коллекции, `c:<id>` — коллекция, `s:<id>` — умная коллекция,
-     * `none` — видео без коллекции. В список попадают только видео.
+     * `none` — без коллекции. В список попадают видео и фото.
      */
     private fun listDarkframe(serverId: String, path: String): List<MediaEntry> {
         val server = darkframes.get(serverId) ?: error("Darkframe удалён из списка")
@@ -99,7 +108,7 @@ class MediaLibrary(context: Context) {
             path = if (c.smartFilter != null) "s:${c.id}" else "c:${c.id}",
             isDirectory = true,
         )
-        fun video(item: DarkframeClient.Item) = MediaEntry(
+        fun file(item: DarkframeClient.Item) = MediaEntry(
             name = item.displayName,
             path = item.id,
             isDirectory = false,
@@ -107,71 +116,74 @@ class MediaLibrary(context: Context) {
             playUri = Uri.parse(item.videoUrl),
             thumbnail = item.thumbUrl,
             formatHint = "${item.fileName} ${item.title}",
-            darkframe = DarkframeRef(serverId, item.id),
+            darkframe = DarkframeRef(serverId, item.id).takeIf { item.isVideo },
+            isImage = item.isImage,
         )
+        fun media(items: List<DarkframeClient.Item>) = items.filter { it.isVideo || it.isImage }.map(::file)
         return when {
             path.isEmpty() -> DarkframeClient.collections(server).filter { it.parentId == null }.map(::folder) +
                 MediaEntry("Без коллекции", "none", isDirectory = true)
-            path == "none" -> DarkframeClient.items(server, null).second.filter { it.isVideo }.map(::video)
+            path == "none" -> media(DarkframeClient.items(server, null).second)
             path.startsWith("s:") -> {
                 val filter = DarkframeClient.collections(server).find { it.id == path.removePrefix("s:") }?.smartFilter
                     ?: error("Умная коллекция не найдена")
-                DarkframeClient.smartItems(server, filter).filter { it.isVideo }.map(::video)
+                media(DarkframeClient.smartItems(server, filter))
             }
             else -> {
                 val (children, items) = DarkframeClient.items(server, path.removePrefix("c:"))
-                children.map(::folder) + items.filter { it.isVideo }.map(::video)
+                children.map(::folder) + media(items)
             }
         }
     }
 
-    /** Корень — папки, в которых Android нашёл видео; внутри папки — сами видео. */
-    private fun listPhone(path: String): List<MediaEntry> {
-        val collection = MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-        val projection = arrayOf(
-            MediaStore.Video.Media._ID,
-            MediaStore.Video.Media.DISPLAY_NAME,
-            MediaStore.Video.Media.SIZE,
-            MediaStore.Video.Media.BUCKET_ID,
-            MediaStore.Video.Media.BUCKET_DISPLAY_NAME,
-        )
-        val selection = if (path.isEmpty()) null else "${MediaStore.Video.Media.BUCKET_ID} = ?"
-        val args = if (path.isEmpty()) null else arrayOf(path)
-        val result = mutableListOf<MediaEntry>()
-        val buckets = mutableSetOf<String>()
+    /** Корень — папки, в которых Android нашёл видео или фото; внутри папки — они сами. */
+    private fun listPhone(path: String): List<MediaEntry> =
+        if (path.isEmpty()) {
+            (phoneBuckets(MediaStore.Video.Media.EXTERNAL_CONTENT_URI) + phoneBuckets(MediaStore.Images.Media.EXTERNAL_CONTENT_URI))
+                .distinctBy { it.path }
+        } else {
+            phoneFiles(MediaStore.Video.Media.EXTERNAL_CONTENT_URI, path, image = false) +
+                phoneFiles(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, path, image = true)
+        }
 
-        context.contentResolver.query(collection, projection, selection, args, null)?.use { cursor ->
-            val idCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
-            val nameCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.DISPLAY_NAME)
-            val sizeCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.SIZE)
-            val bucketIdCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.BUCKET_ID)
-            val bucketNameCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media.BUCKET_DISPLAY_NAME)
+    private fun phoneBuckets(collection: Uri): List<MediaEntry> {
+        val result = mutableListOf<MediaEntry>()
+        val seen = mutableSetOf<String>()
+        val projection = arrayOf(MediaStore.MediaColumns.BUCKET_ID, MediaStore.MediaColumns.BUCKET_DISPLAY_NAME)
+        context.contentResolver.query(collection, projection, null, null, null)?.use { cursor ->
             while (cursor.moveToNext()) {
-                if (path.isEmpty()) {
-                    val bucketId = cursor.getString(bucketIdCol) ?: continue
-                    if (buckets.add(bucketId)) {
-                        result += MediaEntry(cursor.getString(bucketNameCol) ?: "Без имени", bucketId, isDirectory = true)
-                    }
-                } else {
-                    result += MediaEntry(
-                        name = cursor.getString(nameCol) ?: "",
-                        path = cursor.getString(nameCol) ?: "",
-                        isDirectory = false,
-                        size = cursor.getLong(sizeCol),
-                        playUri = ContentUris.withAppendedId(collection, cursor.getLong(idCol)),
-                    ).let { it.copy(thumbnail = it.playUri.toString()) }
-                }
+                val id = cursor.getString(0) ?: continue
+                if (seen.add(id)) result += MediaEntry(cursor.getString(1) ?: "Без имени", id, isDirectory = true)
+            }
+        }
+        return result
+    }
+
+    private fun phoneFiles(collection: Uri, bucketId: String, image: Boolean): List<MediaEntry> {
+        val result = mutableListOf<MediaEntry>()
+        val projection = arrayOf(MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.MediaColumns.SIZE)
+        context.contentResolver.query(
+            collection, projection, "${MediaStore.MediaColumns.BUCKET_ID} = ?", arrayOf(bucketId), null,
+        )?.use { cursor ->
+            while (cursor.moveToNext()) {
+                val name = cursor.getString(1) ?: ""
+                val uri = ContentUris.withAppendedId(collection, cursor.getLong(0))
+                result += MediaEntry(
+                    name = name,
+                    path = uri.toString(),
+                    isDirectory = false,
+                    size = cursor.getLong(2),
+                    playUri = uri,
+                    thumbnail = uri.toString(),
+                    isImage = image,
+                )
             }
         }
         return result
     }
 
     companion object {
-        private val videoExtensions = setOf(
-            "mp4", "m4v", "mkv", "webm", "mov", "avi", "ts", "m2ts", "mts", "wmv", "flv", "3gp", "mpg", "mpeg",
-        )
-
-        fun isVideo(name: String) = name.substringAfterLast('.', "").lowercase() in videoExtensions
+        fun isVideo(name: String) = VideoFiles.isVideo(name)
     }
 }
 

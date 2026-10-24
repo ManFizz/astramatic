@@ -74,5 +74,12 @@ object VideoFiles {
         "mp4", "m4v", "mkv", "webm", "mov", "avi", "ts", "m2ts", "mts", "wmv", "flv", "3gp", "mpg", "mpeg",
     )
 
+    private val imageExtensions = setOf("jpg", "jpeg", "png", "webp", "heic", "heif", "bmp", "gif", "avif")
+
     fun isVideo(name: String) = name.substringAfterLast('.', "").lowercase() in extensions
+
+    fun isImage(name: String) = name.substringAfterLast('.', "").lowercase() in imageExtensions
+
+    /** То, что показывает плеер: видео и фото. */
+    fun isMedia(name: String) = isVideo(name) || isImage(name)
 }

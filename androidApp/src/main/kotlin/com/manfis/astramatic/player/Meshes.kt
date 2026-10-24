@@ -119,6 +119,38 @@ object Meshes {
         return Mesh(data.toBuffer(), data.size / Mesh.FLOATS_PER_VERTEX)
     }
 
+    /**
+     * Экран кинотеатра сразу в метрах: [width] × [height] на расстоянии [distance] перед зрителем.
+     * [curve] 0 — плоский, 1 — дуга с центром в голове зрителя (везде одинаково далеко).
+     */
+    fun screen(width: Float, height: Float, distance: Float, curve: Float, segments: Int = 64): Mesh {
+        val data = FloatArray(segments * 6 * Mesh.FLOATS_PER_VERTEX)
+        var i = 0
+        val radius = if (curve > 0.001f) distance / curve else 0f
+        fun put(column: Int, top: Boolean) {
+            val u = column.toFloat() / segments
+            val arc = (u - 0.5f) * width
+            if (radius == 0f) {
+                data[i++] = arc
+                data[i++] = if (top) height / 2 else -height / 2
+                data[i++] = -distance
+            } else {
+                // Дуга окружности радиуса radius, касается плоского экрана в центре.
+                val angle = arc / radius
+                data[i++] = radius * sin(angle)
+                data[i++] = if (top) height / 2 else -height / 2
+                data[i++] = -distance + radius - radius * cos(angle)
+            }
+            data[i++] = u
+            data[i++] = if (top) 1f else 0f
+        }
+        for (c in 0 until segments) {
+            put(c, false); put(c + 1, false); put(c + 1, true)
+            put(c, false); put(c + 1, true); put(c, true)
+        }
+        return Mesh(data.toBuffer(), data.size / Mesh.FLOATS_PER_VERTEX)
+    }
+
     /** Прямоугольник 1×1 в плоскости z = 0; размер и положение задаёт матрица модели. */
     fun quad(): Mesh {
         val data = floatArrayOf(

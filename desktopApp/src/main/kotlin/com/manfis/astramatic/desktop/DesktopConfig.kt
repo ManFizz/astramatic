@@ -83,7 +83,7 @@ object FolderBrowser {
     fun list(folder: FolderConfig, path: String): List<FolderEntry>? {
         val dir = resolve(folder, path)?.takeIf { it.isDirectory } ?: return null
         return dir.listFiles().orEmpty()
-            .filter { !it.isHidden && (it.isDirectory || VideoFiles.isVideo(it.name)) }
+            .filter { !it.isHidden && (it.isDirectory || VideoFiles.isMedia(it.name)) }
             .sortedWith(compareBy<File> { !it.isDirectory }.thenBy(String.CASE_INSENSITIVE_ORDER) { it.name })
             .map {
                 FolderEntry(

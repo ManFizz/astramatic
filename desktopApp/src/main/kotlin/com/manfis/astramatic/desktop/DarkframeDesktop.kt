@@ -101,7 +101,10 @@ object DarkframeDesktop {
 
     private fun videos(items: JsonElement?): List<Entry> =
         (items as? JsonArray).orEmpty().map { it.jsonObject }
-            .filter { it.string("mimeType").orEmpty().startsWith("video/") || VideoFiles.isVideo(it.string("fileName").orEmpty()) }
+            .filter {
+                val mime = it.string("mimeType").orEmpty()
+                mime.startsWith("video/") || mime.startsWith("image/") || VideoFiles.isMedia(it.string("fileName").orEmpty())
+            }
             .map { Entry(it.string("title").orEmpty().ifBlank { it.string("fileName").orEmpty() }, it.string("id")!!, isFolder = false) }
 
     private fun rpc(link: DarkframeLink, channel: String, vararg args: JsonElement): JsonElement? {

@@ -40,6 +40,8 @@ enum class RemoteAction(
     VolumeDown("Тише", ActionGroup.Playback),
 
     Recenter("Рецентр", ActionGroup.View),
+    ZoomIn("Приблизить", ActionGroup.View),
+    ZoomOut("Отдалить", ActionGroup.View),
 
     NavUp("Вверх по меню", ActionGroup.Menu),
     NavDown("Вниз по меню", ActionGroup.Menu),
@@ -51,6 +53,7 @@ enum class RemoteAction(
 
     AxisScroll("Прокрутка меню", ActionGroup.Axes, true),
     AxisSeek("Перемотка — чем сильнее отклонение, тем быстрее", ActionGroup.Axes, true),
+    AxisZoom("Приближение — плавно", ActionGroup.Axes, true),
     AxisNavHorizontal("Влево / вправо по меню", ActionGroup.Axes, true),
     AxisNavVertical("Вверх / вниз по меню", ActionGroup.Axes, true),
     ;

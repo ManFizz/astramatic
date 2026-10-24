@@ -71,6 +71,11 @@ class VrMenuState {
     var hasPrevious by mutableStateOf(false)
     var hasNext by mutableStateOf(false)
 
+    /** Открыто фото, а не видео: без перемотки и скорости. */
+    var isImage by mutableStateOf(false)
+    var zoom by mutableStateOf(1f)
+    var speed by mutableStateOf(1f)
+
     /** Последняя кнопка пульта: что именно он присылает. */
     var lastKey by mutableStateOf<String?>(null)
 
@@ -94,6 +99,11 @@ interface VrMenuActions {
     fun resetFormat()
     fun toggleStereo()
     fun recenter()
+    fun setZoom(zoom: Float)
+    fun setSpeed(speed: Float)
+
+    /** Текущее фото — в окружение (своя панорама). Возвращает, что получилось, для подписи. */
+    fun setAsEnvironment(): String
     fun play(playlist: Playlist)
     fun previousFile()
     fun nextFile()
@@ -186,34 +196,47 @@ private fun ControlsBar(state: VrMenuState, actions: VrMenuActions) {
                 modifier = Modifier.weight(1f),
             )
             Spacer(Modifier.width(12.dp))
-            Text(
-                "${formatTime(dragging?.toLong() ?: position)} / ${formatTime(duration)}",
-                style = MaterialTheme.typography.bodyMedium,
-            )
+            if (!state.isImage) {
+                Text(
+                    "${formatTime(dragging?.toLong() ?: position)} / ${formatTime(duration)}",
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
         }
-        Slider(
-            value = dragging ?: position.toFloat(),
-            onValueChange = { dragging = it },
-            onValueChangeFinished = {
-                dragging?.let { actions.seekTo(it.toLong()) }
-                dragging = null
-            },
-            valueRange = 0f..duration.coerceAtLeast(1).toFloat(),
-        )
+        if (!state.isImage) {
+            Slider(
+                value = dragging ?: position.toFloat(),
+                onValueChange = { dragging = it },
+                onValueChangeFinished = {
+                    dragging?.let { actions.seekTo(it.toLong()) }
+                    dragging = null
+                },
+                valueRange = 0f..duration.coerceAtLeast(1).toFloat(),
+            )
+        } else {
+            Spacer(Modifier.height(12.dp))
+        }
         // Три зоны: служебные кнопки слева и справа равной ширины, перемотка и пауза — точно по центру.
         Row(verticalAlignment = Alignment.CenterVertically) {
             Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 TextButton(onClick = actions::recenter, contentPadding = compact) { Text("Центр") }
+                TextButton(onClick = { actions.setZoom(state.zoom / ZOOM_STEP) }, contentPadding = compact) { Text("−") }
+                TextButton(onClick = { actions.setZoom(state.zoom * ZOOM_STEP) }, contentPadding = compact) { Text("+") }
                 // Из шлема 2D не включается: только пальцем, кнопкой на экране (как крестик).
                 if (!state.stereo) TextButton(onClick = actions::toggleStereo, contentPadding = compact) { Text("VR") }
             }
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 TextButton(onClick = actions::previousFile, enabled = state.hasPrevious, contentPadding = compact) { Text("⏮") }
-                TextButton(onClick = { actions.seekBy(-30_000) }, contentPadding = compact) { Text("−30") }
-                TextButton(onClick = { actions.seekBy(-10_000) }, contentPadding = compact) { Text("−10") }
+                if (!state.isImage) {
+                    TextButton(onClick = { actions.seekBy(-30_000) }, contentPadding = compact) { Text("−30") }
+                    TextButton(onClick = { actions.seekBy(-10_000) }, contentPadding = compact) { Text("−10") }
+                }
+                // У фото ⏯ — слайд-шоу.
                 Button(onClick = actions::togglePlayback, contentPadding = compact) { Text(if (playing) "⏸" else "▶") }
-                TextButton(onClick = { actions.seekBy(10_000) }, contentPadding = compact) { Text("+10") }
-                TextButton(onClick = { actions.seekBy(30_000) }, contentPadding = compact) { Text("+30") }
+                if (!state.isImage) {
+                    TextButton(onClick = { actions.seekBy(10_000) }, contentPadding = compact) { Text("+10") }
+                    TextButton(onClick = { actions.seekBy(30_000) }, contentPadding = compact) { Text("+30") }
+                }
                 TextButton(onClick = actions::nextFile, enabled = state.hasNext, contentPadding = compact) { Text("⏭") }
             }
             Row(Modifier.weight(1f), horizontalArrangement = Arrangement.End) {
@@ -350,12 +373,40 @@ private fun VideoTab(state: VrMenuState, actions: VrMenuActions) {
                 range = 1f..12f,
                 step = 0.1f,
             ) { settings.screenDistance = it }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("Подсветка комнаты", style = MaterialTheme.typography.bodyLarge)
-                    Text("Тёмный зал вокруг экрана мягко светится цветом кадра.", style = MaterialTheme.typography.bodySmall)
+            LabeledSlider(
+                title = "Изгиб экрана: ${(settings.screenCurve * 100).roundToInt()}%",
+                hint = "100% — экран дугой вокруг вас, края на том же расстоянии, что и центр.",
+                value = settings.screenCurve,
+                range = 0f..1f,
+                step = 0.05f,
+            ) { settings.screenCurve = it }
+        }
+
+        HorizontalDivider(Modifier.padding(vertical = 4.dp))
+        LabeledSlider(
+            title = "Приближение: ${"%.1f".format(state.zoom)}×",
+            hint = "Только для этого файла. Меню не приближается.",
+            value = state.zoom,
+            range = MIN_ZOOM..MAX_ZOOM,
+            step = 0.1f,
+        ) { actions.setZoom(it) }
+        LabeledSlider(
+            title = "Яркость: ${(settings.brightness * 100).roundToInt()}%",
+            hint = null,
+            value = settings.brightness,
+            range = 0.5f..1.5f,
+            step = 0.05f,
+        ) { settings.brightness = it }
+        if (!state.isImage) {
+            Text("Скорость", style = MaterialTheme.typography.titleMedium)
+            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                SPEEDS.forEach { speed ->
+                    FilterChip(
+                        selected = state.speed == speed,
+                        onClick = { actions.setSpeed(speed) },
+                        label = { Text("${speed}×".replace(".0×", "×")) },
+                    )
                 }
-                Switch(checked = settings.ambientLight, onCheckedChange = { settings.ambientLight = it })
             }
         }
 
@@ -363,8 +414,16 @@ private fun VideoTab(state: VrMenuState, actions: VrMenuActions) {
             OutlinedButton(onClick = actions::recenter) { Text("Рецентр") }
             OutlinedButton(onClick = actions::resetFormat) { Text("Формат по имени файла") }
         }
+        if (state.isImage) {
+            var note by remember { mutableStateOf<String?>(null) }
+            OutlinedButton(onClick = { note = actions.setAsEnvironment() }) { Text("Сделать окружением") }
+            Text(
+                note ?: "Фото-панорама 360° станет окружением вокруг вас (Настройки → Окружение).",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
         Text(
-            "Формат угадывается по имени файла. Выбранный здесь запоминается для этого видео.",
+            "Формат угадывается по имени файла. Выбранный здесь запоминается для этого файла.",
             style = MaterialTheme.typography.bodySmall,
         )
     }
@@ -389,6 +448,11 @@ private fun LabeledSlider(
         if (hint != null) Text(hint, style = MaterialTheme.typography.bodySmall)
     }
 }
+
+private const val ZOOM_STEP = 1.15f
+const val MIN_ZOOM = 0.5f
+const val MAX_ZOOM = 4f
+private val SPEEDS = listOf(0.5f, 0.75f, 1f, 1.25f, 1.5f, 2f)
 
 private fun formatTime(ms: Long): String {
     val total = ms.coerceAtLeast(0) / 1000

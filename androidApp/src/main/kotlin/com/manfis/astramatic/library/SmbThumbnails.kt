@@ -16,6 +16,9 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import okio.FileSystem
 import okio.Path.Companion.toOkioPath
+import android.graphics.BitmapFactory
+import com.manfis.astramatic.remote.VideoFiles
+import okio.Buffer
 import java.io.File
 import java.io.IOException
 import java.security.MessageDigest
@@ -30,6 +33,15 @@ class SmbThumbnailFetcher(
 ) : Fetcher {
 
     override suspend fun fetch(): FetchResult {
+        // Фото по SMB целиком (для просмотра): отдаём файл как есть, Coil сам его декодирует.
+        if (uri.scheme == SmbUris.SCHEME && VideoFiles.isImage(uri.path.orEmpty())) {
+            val bytes = limit.withPermit { readSmb(uri) }
+            return SourceFetchResult(
+                source = ImageSource(Buffer().write(bytes), FileSystem.SYSTEM),
+                mimeType = null,
+                dataSource = DataSource.NETWORK,
+            )
+        }
         val file = cacheFile()
         if (!file.exists()) {
             // Одновременно читать много файлов по сети — только мешать воспроизведению и друг другу.
@@ -48,7 +60,27 @@ class SmbThumbnailFetcher(
         return File(File(context.cacheDir, "smb-thumbs").apply { mkdirs() }, "$hash.jpg")
     }
 
+    private fun readSmb(smbUri: android.net.Uri): ByteArray {
+        val server = SmbServerStore(context).get(SmbUris.serverId(smbUri)) ?: throw IOException("Компьютер удалён")
+        return SmbConnections.openFile(server, SmbUris.path(smbUri)).use { file ->
+            file.inputStream.use { it.readBytes() }
+        }
+    }
+
+    /** Превью фото по SMB: уменьшенная копия, чтобы не тянуть оригинал при каждом показе папки. */
+    private fun thumbnailOfImage(target: File) {
+        val bytes = readSmb(android.net.Uri.parse(uri.toString().removePrefix("$SMB_THUMB_SCHEME:")))
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        var sample = 1
+        while (bounds.outWidth / (sample * 2) >= THUMB_WIDTH * 2) sample *= 2
+        val bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, BitmapFactory.Options().apply { inSampleSize = sample })
+            ?: throw IOException("Не удалось прочитать фото")
+        target.outputStream().use { oneEye(bitmap).compress(Bitmap.CompressFormat.JPEG, 85, it) }
+    }
+
     private fun extractTo(target: File) {
+        if (uri.scheme == SMB_THUMB_SCHEME) return thumbnailOfImage(target)
         if (uri.scheme == HTTP_VIDEO_SCHEME) return extractHttp(target)
         val server = SmbServerStore(context).get(SmbUris.serverId(uri)) ?: throw IOException("Компьютер удалён")
         SmbConnections.openFile(server, SmbUris.path(uri)).use { smbFile ->
@@ -102,7 +134,7 @@ class SmbThumbnailFetcher(
 
     class Factory(private val context: Context) : Fetcher.Factory<Uri> {
         override fun create(data: Uri, options: Options, imageLoader: ImageLoader): Fetcher? {
-            if (data.scheme != SmbUris.SCHEME && data.scheme != HTTP_VIDEO_SCHEME) return null
+            if (data.scheme != SmbUris.SCHEME && data.scheme != HTTP_VIDEO_SCHEME && data.scheme != SMB_THUMB_SCHEME) return null
             return SmbThumbnailFetcher(android.net.Uri.parse(data.toString()), context.applicationContext)
         }
     }
@@ -110,6 +142,9 @@ class SmbThumbnailFetcher(
     companion object {
         /** Превью видео по HTTP: `httpvideo:<url>` — чтобы Coil не скачивал весь файл обычным загрузчиком. */
         const val HTTP_VIDEO_SCHEME = "httpvideo"
+
+        /** Превью фото по SMB: `smbthumb:<smb-ссылка>`. */
+        const val SMB_THUMB_SCHEME = "smbthumb"
 
         private const val THUMB_WIDTH = 320
         private val limit = Semaphore(2)

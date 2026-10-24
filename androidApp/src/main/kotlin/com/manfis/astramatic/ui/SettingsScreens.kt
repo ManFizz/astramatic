@@ -17,6 +17,11 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.InputChip
 import androidx.compose.foundation.horizontalScroll
 import com.manfis.astramatic.settings.ActionGroup
+import androidx.compose.material3.FilterChip
+import com.manfis.astramatic.model.Projection
+import com.manfis.astramatic.model.StereoLayout
+import com.manfis.astramatic.model.VideoFormat
+import com.manfis.astramatic.player.Environment
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -52,6 +57,60 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
             checked = settings.autoplayNext,
         ) { settings.autoplayNext = it }
 
+        if (settings.slideshowSeconds > 0) {
+            Text("Слайд-шоу фото: ${settings.slideshowSeconds} с на кадр")
+        } else {
+            Text("Слайд-шоу фото: выключено")
+        }
+        Slider(
+            value = settings.slideshowSeconds.toFloat(),
+            onValueChange = { settings.slideshowSeconds = it.roundToInt() },
+            valueRange = 0f..30f,
+        )
+
+        HorizontalDivider()
+
+        Text("Окружение", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "Что вокруг в меню, у плоского экрана и за видео 180°.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Environment.entries.forEach { environment ->
+                FilterChip(
+                    selected = settings.environment == environment.name,
+                    onClick = { settings.environment = environment.name },
+                    label = { Text(environment.title) },
+                )
+            }
+        }
+        if (settings.environment == Environment.Custom.name) {
+            Text(
+                "Откройте фото-панораму 360° и во вкладке «Видео» нажмите «Сделать окружением».",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
+        SwitchRow(
+            title = "Подсветка в кинозале",
+            hint = "Стены мягко светятся цветом кадра плоского видео.",
+            checked = settings.ambientLight,
+        ) { settings.ambientLight = it }
+        SwitchRow(
+            title = "Режим «лёжа»",
+            hint = "Рецентр поворачивает картинку и вверх-вниз: можно смотреть в потолок. Меню встаёт туда же.",
+            checked = settings.recenterPitch,
+        ) { settings.recenterPitch = it }
+
+        HorizontalDivider()
+
+        Text("Формат, если не распознан по имени", style = MaterialTheme.typography.titleMedium)
+        Text(
+            "Теги в имени вроде _180_LR, _360, _TB, _3dh определяются автоматически.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        DefaultFormatPicker("Видео", settings.defaultVideoFormat) { settings.defaultVideoFormat = it }
+        DefaultFormatPicker("Фото", settings.defaultImageFormat) { settings.defaultImageFormat = it }
+
         HorizontalDivider()
 
         Text("Шлем без кнопки", style = MaterialTheme.typography.titleMedium)
@@ -66,6 +125,30 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
                 value = settings.dwellMs.toFloat(),
                 onValueChange = { settings.dwellMs = (it / 100).roundToInt() * 100 },
                 valueRange = 600f..3000f,
+            )
+        }
+    }
+}
+
+@Composable
+private fun DefaultFormatPicker(title: String, encoded: String, onChange: (String) -> Unit) {
+    val format = VideoFormat.decode(encoded) ?: VideoFormat()
+    Text(title, style = MaterialTheme.typography.bodyLarge)
+    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        Projection.entries.forEach {
+            FilterChip(
+                selected = format.projection == it,
+                onClick = { onChange(format.copy(projection = it).encode()) },
+                label = { Text(projectionLabel(it)) },
+            )
+        }
+    }
+    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        StereoLayout.entries.forEach {
+            FilterChip(
+                selected = format.stereo == it,
+                onClick = { onChange(format.copy(stereo = it).encode()) },
+                label = { Text(stereoLabel(it)) },
             )
         }
     }
@@ -179,5 +262,6 @@ private fun BindingRow(action: RemoteAction, bindings: KeyBindings, onAdd: () ->
 private fun captureHint(action: RemoteAction): String = when (action) {
     RemoteAction.AxisScroll, RemoteAction.AxisNavVertical -> "отклоните стик ВНИЗ…"
     RemoteAction.AxisSeek, RemoteAction.AxisNavHorizontal -> "отклоните стик ВПРАВО (вперёд)…"
+    RemoteAction.AxisZoom -> "отклоните стик ВВЕРХ (приблизить)…"
     else -> "нажмите кнопку или курок…"
 }
