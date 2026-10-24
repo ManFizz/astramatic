@@ -76,6 +76,9 @@ class VrMenuState {
     var zoom by mutableStateOf(1f)
     var speed by mutableStateOf(1f)
 
+    /** Сообщение приложения (ошибка и т. п.) — показывается вверху меню, а не системной всплывашкой. */
+    var notice by mutableStateOf<String?>(null)
+
     /** Последняя кнопка пульта: что именно он присылает. */
     var lastKey by mutableStateOf<String?>(null)
 
@@ -253,6 +256,19 @@ private fun ControlsBar(state: VrMenuState, actions: VrMenuActions) {
 @Composable
 private fun MenuContent(state: VrMenuState, actions: VrMenuActions) {
     Column(Modifier.fillMaxSize()) {
+        state.notice?.let { notice ->
+            Surface(
+                color = MaterialTheme.colorScheme.errorContainer,
+                contentColor = MaterialTheme.colorScheme.onErrorContainer,
+                shape = RoundedCornerShape(12.dp),
+                modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 12.dp),
+            ) {
+                Row(Modifier.padding(start = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(notice, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
+                    TextButton(onClick = { state.notice = null }) { Text("✕") }
+                }
+            }
+        }
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,

@@ -547,22 +547,6 @@ private fun formatSize(bytes: Long): String = when {
     else -> "${bytes / 1024} КБ"
 }
 
-/** Понятное сообщение для частых ошибок SMB. */
-private fun Throwable.describe(): String {
-    val chain = generateSequence(this) { it.cause }.toList()
-    val text = chain.joinToString(" ") { "${it::class.simpleName} ${it.message}" }
-    return when {
-        "STATUS_LOGON_FAILURE" in text -> "Неверный логин или пароль."
-        "STATUS_ACCESS_DENIED" in text -> "Нет доступа к папке для этого пользователя."
-        "STATUS_BAD_NETWORK_NAME" in text -> "Общая папка с таким именем не найдена."
-        "STATUS_OBJECT_NAME_NOT_FOUND" in text || "STATUS_OBJECT_PATH_NOT_FOUND" in text -> "Папка не найдена."
-        chain.any { it is java.net.UnknownHostException } -> "Компьютер с таким именем не найден. Попробуйте IP-адрес."
-        chain.any { it is java.net.ConnectException || it is java.net.SocketTimeoutException } ->
-            "Компьютер не отвечает. Проверьте, что он включён, в той же сети и общий доступ разрешён в брандмауэре."
-        else -> chain.last().message ?: chain.last()::class.simpleName ?: "Неизвестная ошибка"
-    }
-}
-
 private fun displayName(context: Context, uri: Uri): String =
     context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)
         ?.use { if (it.moveToFirst()) it.getString(0) else null }

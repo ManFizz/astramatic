@@ -18,7 +18,6 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.TextView
-import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.addCallback
 import androidx.annotation.OptIn
@@ -47,6 +46,8 @@ import androidx.lifecycle.lifecycleScope
 import coil3.SingletonImageLoader
 import coil3.request.ImageRequest
 import coil3.request.SuccessResult
+import coil3.request.ErrorResult
+import com.manfis.astramatic.ui.describe
 import coil3.request.allowHardware
 import coil3.toBitmap
 import kotlinx.coroutines.Job
@@ -150,8 +151,7 @@ class PlayerActivity : ComponentActivity() {
             }
 
             override fun onPlayerError(error: PlaybackException) {
-                Toast.makeText(this@PlayerActivity, "Ошибка воспроизведения: ${error.errorCodeName}", Toast.LENGTH_LONG).show()
-                showMenu(VrMenuState.Tab.Files)
+                showNotice(error.describe(), VrMenuState.Tab.Files)
             }
         })
 
@@ -268,7 +268,9 @@ class PlayerActivity : ComponentActivity() {
         override fun play(playlist: Playlist) = openPlaylist(playlist)
         override fun previousFile() { playlist?.moved(-1)?.let(::openPlaylist) }
         override fun nextFile() { playlist?.moved(1)?.let(::openPlaylist) }
-        override fun headsetSaved() = cardboardView.loadDeviceParams()
+        // Только на потоке отрисовки: SDK пользуется параметрами шлема там же, и перечитывание
+        // с главного потока роняло приложение посреди кадра.
+        override fun headsetSaved() = cardboardView.queueEvent { cardboardView.loadDeviceParams() }
         override fun openMenu(tab: VrMenuState.Tab) = showMenu(tab)
         override fun hide() = hideMenu()
         override fun exit() = finish()
@@ -357,7 +359,8 @@ class PlayerActivity : ComponentActivity() {
             val result = SingletonImageLoader.get(this@PlayerActivity).execute(request)
             val bitmap = (result as? SuccessResult)?.image?.toBitmap()
             if (bitmap == null) {
-                Toast.makeText(this@PlayerActivity, "Не удалось открыть фото", Toast.LENGTH_LONG).show()
+                val reason = (result as? ErrorResult)?.throwable?.describe()
+                showNotice("Не удалось открыть фото${reason?.let { ": $it" } ?: "."}")
                 return@launch
             }
             if (playlist?.current != item) return@launch
@@ -457,7 +460,7 @@ class PlayerActivity : ComponentActivity() {
         val host = Uri.parse(desktop.baseUrl).host
         val server = all.find { Uri.parse(it.baseUrl).host == host } ?: all.singleOrNull()
         if (server == null) {
-            Toast.makeText(this, "Подключите телефон к Darkframe: «+ Darkframe» на главном экране", Toast.LENGTH_LONG).show()
+            showNotice("Подключите телефон к Darkframe: «+ Darkframe» на главном экране.")
             return
         }
         val settingsRef = this
@@ -528,7 +531,14 @@ class PlayerActivity : ComponentActivity() {
         updateModeButton()
     }
 
+    /** Сообщение приложения: в меню, где его видно и в шлеме, и на экране. */
+    private fun showNotice(text: String, tab: VrMenuState.Tab? = null) {
+        menu.notice = text
+        showMenu(tab)
+    }
+
     private fun hideMenu() {
+        menu.notice = null
         handler.removeCallbacks(hoverTick)
         uiHost.hover(null, null)
         renderer.panelVisible = false

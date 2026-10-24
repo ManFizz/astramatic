@@ -1,6 +1,5 @@
 package com.manfis.astramatic.headset
 
-import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -34,7 +33,7 @@ import java.util.Locale
  * [closeOnSave] = false — остаться на экране после сохранения: в шлеме так удобнее подбирать значения.
  */
 @Composable
-fun HeadsetScreen(onBack: () -> Unit, onSaved: () -> Unit = {}, closeOnSave: Boolean = true) {
+fun HeadsetScreen(onBack: () -> Unit, onSaved: () -> Unit = {}, closeOnSave: Boolean = false) {
     val context = LocalContext.current
     var params by remember { mutableStateOf(HeadsetParams.load(context)) }
     var status by remember { mutableStateOf<String?>(null) }
@@ -55,9 +54,6 @@ fun HeadsetScreen(onBack: () -> Unit, onSaved: () -> Unit = {}, closeOnSave: Boo
             onSave = {
                 val saved = params.save(context)
                 status = if (saved) "Сохранено и применено." else "Не удалось сохранить."
-                if (closeOnSave) {
-                    Toast.makeText(context, status, Toast.LENGTH_SHORT).show()
-                }
                 if (saved) {
                     onSaved()
                     if (closeOnSave) onBack()

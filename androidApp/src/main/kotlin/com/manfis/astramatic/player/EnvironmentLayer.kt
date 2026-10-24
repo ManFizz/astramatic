@@ -46,7 +46,11 @@ class EnvironmentLayer(private val customFile: File) {
     }
 
     fun create() {
-        program = GlUtil.program(VERTEX_SHADER, FRAGMENT_SHADER)
+        // Если какой-то видеочип не соберёт шейдер — живём без окружения, а не падаем.
+        program = runCatching { GlUtil.program(VERTEX_SHADER, FRAGMENT_SHADER) }
+            .onFailure { android.util.Log.e("AstraMatic", "Окружение отключено: шейдер не собрался", it) }
+            .getOrDefault(0)
+        if (program == 0) return
         aPosition = GLES20.glGetAttribLocation(program, "aPosition")
         uMvp = GLES20.glGetUniformLocation(program, "uMvp")
         uMode = GLES20.glGetUniformLocation(program, "uMode")
@@ -73,7 +77,7 @@ class EnvironmentLayer(private val customFile: File) {
         tint: Boolean,
     ) {
         var mode = environment
-        if (mode == Environment.Black) return
+        if (mode == Environment.Black || program == 0) return
         if (mode == Environment.Custom && !ensureCustom()) mode = Environment.Space
 
         GLES20.glUseProgram(program)
