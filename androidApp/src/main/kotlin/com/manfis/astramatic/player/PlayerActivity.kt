@@ -65,6 +65,7 @@ import android.os.Build
 import com.manfis.astramatic.library.DesktopClient
 import com.manfis.astramatic.library.DesktopServer
 import com.manfis.astramatic.library.MediaLibrary
+import com.manfis.astramatic.library.SmbThumbnailFetcher
 import com.manfis.astramatic.library.MediaSourceRef
 import com.manfis.astramatic.model.VideoFormatDetector
 import com.manfis.astramatic.remote.PlayerStatus
@@ -90,6 +91,7 @@ class PlayerActivity : ComponentActivity() {
     private val settings by lazy { AppSettings.get(this) }
     private val positions by lazy { ResumePositions(this) }
     private val formats by lazy { FormatMemory(this) }
+    private val history by lazy { History.get(this) }
     private val darkframes by lazy { DarkframeStore(this) }
 
     /** Сеть (позиции в Darkframe, списки с ПК) — не на главном потоке, по одному запросу за раз. */
@@ -297,6 +299,7 @@ class PlayerActivity : ComponentActivity() {
             menuActions.setSpeed(1f)
             player.play()
         }
+        if (settings.keepHistory) history.opened(item)
         menu.isImage = item.isImage
         menu.title = item.title
         menu.hasPrevious = next.hasPrevious
@@ -420,6 +423,7 @@ class PlayerActivity : ComponentActivity() {
         val position = player.currentPosition
         val duration = player.duration
         positions.save(item.uri, position, duration)
+        if (settings.keepHistory && duration > 0) history.progress(item.uri, position, duration)
         val ref = item.darkframe ?: return
         val server = darkframes.get(ref.serverId) ?: return
         if (duration <= 0) return
@@ -473,7 +477,7 @@ class PlayerActivity : ComponentActivity() {
             val items = videos.map {
                 PlaylistItem(
                     it.playUri!!, it.name, VideoFormatDetector.detect(it.formatHint) ?: DefaultFormat.forFile(settingsRef, it.isImage),
-                    it.darkframe, isImage = it.isImage,
+                    it.darkframe, isImage = it.isImage, thumbnail = it.thumbnail,
                 )
             }
             runOnUiThread { openPlaylist(Playlist(items, index)) }
@@ -491,9 +495,11 @@ class PlayerActivity : ComponentActivity() {
             val index = videos.indexOfFirst { it.path == command.path }.takeIf { it >= 0 } ?: return@execute
             val items = videos.map {
                 val image = VideoFiles.isImage(it.name)
+                val uri = server.fileUri(command.folderId, it.path)
                 PlaylistItem(
-                    server.fileUri(command.folderId, it.path), it.name,
+                    uri, it.name,
                     VideoFormatDetector.detect(it.name) ?: DefaultFormat.forFile(settingsRef, image), isImage = image,
+                    thumbnail = if (image) uri.toString() else "${SmbThumbnailFetcher.HTTP_VIDEO_SCHEME}:$uri",
                 )
             }
             runOnUiThread { openPlaylist(Playlist(items, index)) }

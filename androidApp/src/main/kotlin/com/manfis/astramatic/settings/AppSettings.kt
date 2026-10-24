@@ -19,6 +19,9 @@ class AppSettings private constructor(private val prefs: SharedPreferences) {
     /** После конца видео открывать следующее в папке. */
     var autoplayNext by pref("autoplay_next", true)
 
+    /** Запоминать, что смотрели. */
+    var keepHistory by pref("keep_history", true)
+
     /** Нажатие задержкой взгляда — для шлемов без кнопки. */
     var dwellClick by pref("dwell_click", false)
     var dwellMs by pref("dwell_ms", 1500)

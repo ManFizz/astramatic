@@ -52,6 +52,11 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
             checked = settings.resumePlayback,
         ) { settings.resumePlayback = it }
         SwitchRow(
+            title = "История просмотра",
+            hint = "Недавние файлы — на главном экране и во вкладке «Файлы».",
+            checked = settings.keepHistory,
+        ) { settings.keepHistory = it }
+        SwitchRow(
             title = "Следующее видео автоматически",
             hint = "После конца видео открывается следующее из той же папки.",
             checked = settings.autoplayNext,

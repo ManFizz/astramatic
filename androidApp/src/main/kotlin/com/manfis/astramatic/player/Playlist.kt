@@ -13,6 +13,8 @@ data class PlaylistItem(
     val darkframe: DarkframeRef? = null,
     /** Фото: показывается кадром, без перемотки. */
     val isImage: Boolean = false,
+    /** Превью для истории просмотра. */
+    val thumbnail: String? = null,
 )
 
 /** Видео папки, из которой открыли файл: для «следующий / предыдущий» и автоперехода. */

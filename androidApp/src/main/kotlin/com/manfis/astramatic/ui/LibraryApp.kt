@@ -67,6 +67,12 @@ import com.manfis.astramatic.player.PlayerActivity
 import com.manfis.astramatic.settings.SettingsActivity
 import com.manfis.astramatic.player.Playlist
 import com.manfis.astramatic.player.PlaylistItem
+import com.manfis.astramatic.player.History
+import com.manfis.astramatic.player.HistoryEntry
+import android.text.format.DateUtils
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.height
 import com.manfis.astramatic.remote.VideoFiles
 import com.manfis.astramatic.settings.AppSettings
 import kotlinx.coroutines.Dispatchers
@@ -79,6 +85,7 @@ internal sealed interface Screen {
     data class EditServer(val server: SmbServer?) : Screen
     data class EditDarkframe(val server: DarkframeServer?) : Screen
     data class EditDesktop(val server: DesktopServer?) : Screen
+    data object History : Screen
 }
 
 /** Где пользователь находится в библиотеке. Вынесено наружу, чтобы переживать переключение вкладок меню. */
@@ -107,16 +114,23 @@ fun LibraryApp(
 
     BackHandler(enabled = backStack.size > 1) { pop() }
 
-    fun item(uri: Uri, name: String, image: Boolean, hint: String = name, darkframe: DarkframeRef? = null) =
-        PlaylistItem(
-            uri, name, VideoFormatDetector.detect(hint) ?: DefaultFormat.forFile(context, image), darkframe, isImage = image,
-        )
+    fun item(
+        uri: Uri,
+        name: String,
+        image: Boolean,
+        hint: String = name,
+        darkframe: DarkframeRef? = null,
+        thumbnail: String? = null,
+    ) = PlaylistItem(
+        uri, name, VideoFormatDetector.detect(hint) ?: DefaultFormat.forFile(context, image), darkframe,
+        isImage = image, thumbnail = thumbnail,
+    )
 
     /** Список — все видео и фото той же папки, чтобы работали «следующий / предыдущий». */
     fun play(entry: MediaEntry, folder: List<MediaEntry>) {
         val files = folder.filter { !it.isDirectory && it.playUri != null }
         val index = files.indexOf(entry).takeIf { it >= 0 } ?: return
-        onPlay(Playlist(files.map { item(it.playUri!!, it.name, it.isImage, it.formatHint, it.darkframe) }, index))
+        onPlay(Playlist(files.map { item(it.playUri!!, it.name, it.isImage, it.formatHint, it.darkframe, it.thumbnail) }, index))
     }
 
     when (val screen = backStack.last()) {
@@ -128,7 +142,9 @@ fun LibraryApp(
             onEditServer = { push(Screen.EditServer(it)) },
             onEditDarkframe = { push(Screen.EditDarkframe(it)) },
             onEditDesktop = { push(Screen.EditDesktop(it)) },
-            onPickFile = { uri, name -> onPlay(Playlist.single(item(uri, name, VideoFiles.isImage(name)))) },
+            onPickFile = { uri, name -> onPlay(Playlist.single(item(uri, name, VideoFiles.isImage(name), thumbnail = uri.toString()))) },
+            onPlayHistory = { onPlay(Playlist.single(it.toPlaylistItem())) },
+            onOpenHistory = { push(Screen.History) },
         )
 
         is Screen.Browse -> BrowseScreen(
@@ -152,6 +168,11 @@ fun LibraryApp(
                 pop()
             },
             onCancel = ::pop,
+        )
+
+        Screen.History -> HistoryScreen(
+            onBack = ::pop,
+            onPlay = { onPlay(Playlist.single(it.toPlaylistItem())) },
         )
 
         is Screen.EditDesktop -> DesktopScreen(
@@ -192,8 +213,12 @@ private fun HomeScreen(
     onEditDarkframe: (DarkframeServer?) -> Unit,
     onEditDesktop: (DesktopServer?) -> Unit,
     onPickFile: (Uri, String) -> Unit,
+    onPlayHistory: (HistoryEntry) -> Unit,
+    onOpenHistory: () -> Unit,
 ) {
     val context = LocalContext.current
+    val settings = remember { AppSettings.get(context) }
+    val history = remember { History.get(context) }
     val servers = remember { library.servers.all() }
     val darkframes = remember { library.darkframes.all() }
     val desktops = remember { library.desktops.all() }
@@ -211,6 +236,15 @@ private fun HomeScreen(
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         if (!embedded) Text("AstraMatic", style = MaterialTheme.typography.headlineMedium)
+
+        if (settings.keepHistory && history.entries.isNotEmpty()) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Недавние", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
+                TextButton(onClick = onOpenHistory) { Text("Вся история →") }
+            }
+            history.entries.take(RECENT_COUNT).forEach { HistoryRow(it) { onPlayHistory(it) } }
+            HorizontalDivider(Modifier.padding(vertical = 8.dp))
+        }
 
         Text("Источники", style = MaterialTheme.typography.titleMedium)
         SourceRow("📱", "Видео и фото на телефоне", null) { onOpen(MediaSourceRef.Phone, "Телефон") }
@@ -551,6 +585,83 @@ private fun displayName(context: Context, uri: Uri): String =
     context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)
         ?.use { if (it.moveToFirst()) it.getString(0) else null }
         ?: uri.lastPathSegment ?: ""
+
+private const val RECENT_COUNT = 4
+
+/** Вся история просмотра. */
+@Composable
+private fun HistoryScreen(onBack: () -> Unit, onPlay: (HistoryEntry) -> Unit) {
+    val context = LocalContext.current
+    val history = remember { History.get(context) }
+    Column(Modifier.fillMaxSize().safeContentPadding()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            TextButton(onClick = onBack) { Text("← Назад") }
+            Text("История", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+            if (history.entries.isNotEmpty()) TextButton(onClick = { history.clear() }) { Text("Очистить") }
+        }
+        HorizontalDivider()
+        if (history.entries.isEmpty()) {
+            CenterMessage("Здесь появится то, что вы смотрели.") {}
+            return
+        }
+        LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+            items(history.entries, key = { it.uri.toString() }) { entry ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Box(Modifier.weight(1f)) { HistoryRow(entry) { onPlay(entry) } }
+                    TextButton(onClick = { history.remove(entry.uri) }) { Text("✕") }
+                }
+            }
+        }
+    }
+}
+
+/** Строка истории: превью, название, докуда досмотрено и когда. */
+@Composable
+private fun HistoryRow(entry: HistoryEntry, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Box(Modifier.size(width = 96.dp, height = 54.dp).clip(RoundedCornerShape(6.dp))) {
+            if (entry.thumbnail != null) {
+                AsyncImage(
+                    model = entry.thumbnail, contentDescription = null, contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                Text(if (entry.isImage) "🖼" else "🎬", Modifier.align(Alignment.Center), style = MaterialTheme.typography.titleLarge)
+            }
+            // Полоска «досмотрено» внизу превью.
+            if (!entry.isImage && entry.durationMs > 0) {
+                val progress = (entry.positionMs.toFloat() / entry.durationMs).coerceIn(0f, 1f)
+                Box(
+                    Modifier.align(Alignment.BottomStart).fillMaxWidth(progress).height(3.dp)
+                        .background(MaterialTheme.colorScheme.primary),
+                )
+            }
+        }
+        Column(Modifier.weight(1f)) {
+            Text(entry.title, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            val details = listOfNotNull(
+                if (!entry.isImage && entry.durationMs > 0) "${clock(entry.positionMs)} из ${clock(entry.durationMs)}" else null,
+                DateUtils.getRelativeTimeSpanString(entry.watchedAt).toString(),
+            )
+            Text(details.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
+        }
+    }
+}
+
+private fun clock(ms: Long): String {
+    val total = ms / 1000
+    val h = total / 3600
+    val m = total % 3600 / 60
+    val s = total % 60
+    return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
+}
 
 private val MEDIA_PERMISSIONS = arrayOf(Manifest.permission.READ_MEDIA_VIDEO, Manifest.permission.READ_MEDIA_IMAGES)
 
