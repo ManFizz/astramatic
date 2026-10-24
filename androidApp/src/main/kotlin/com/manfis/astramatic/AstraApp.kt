@@ -7,6 +7,7 @@ import coil3.SingletonImageLoader
 import coil3.network.okhttp.OkHttpNetworkFetcherFactory
 import coil3.video.VideoFrameDecoder
 import com.manfis.astramatic.library.DarkframeStore
+import com.manfis.astramatic.library.SmbThumbnailFetcher
 import okhttp3.OkHttpClient
 
 class AstraApp : Application(), SingletonImageLoader.Factory {
@@ -27,6 +28,7 @@ class AstraApp : Application(), SingletonImageLoader.Factory {
             .components {
                 add(OkHttpNetworkFetcherFactory(callFactory = { client }))
                 add(VideoFrameDecoder.Factory())
+                add(SmbThumbnailFetcher.Factory(this@AstraApp))
             }
             .build()
     }

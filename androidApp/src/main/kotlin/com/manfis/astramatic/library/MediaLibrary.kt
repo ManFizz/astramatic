@@ -59,7 +59,7 @@ class MediaLibrary(context: Context) {
                     isDirectory = it.isDirectory,
                     size = it.size,
                     playUri = if (it.isDirectory) null else SmbUris.build(serverId, childPath),
-                )
+                ).let { entry -> entry.copy(thumbnail = entry.playUri?.toString()) }
             }
     }
 
