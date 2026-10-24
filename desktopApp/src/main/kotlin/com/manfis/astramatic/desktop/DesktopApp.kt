@@ -41,7 +41,6 @@ import androidx.compose.material.icons.rounded.Replay10
 import androidx.compose.material.icons.rounded.Replay30
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
-import androidx.compose.material.icons.rounded.ViewInAr
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
@@ -385,13 +384,8 @@ private fun RemoteCard(status: PlayerStatus?, hub: RemoteHub) {
             ActionIcon(Icons.Rounded.Forward10, "Вперёд 10 с (→)") { hub.send(RemoteCommand.SeekBy(10_000)) }
             ActionIcon(Icons.Rounded.Forward30, "Вперёд 30 с (Shift+→)") { hub.send(RemoteCommand.SeekBy(30_000)) }
             ActionIcon(Icons.Rounded.SkipNext, "Следующее видео (PgDn)") { hub.send(RemoteCommand.NextFile) }
-            Row(Modifier.weight(1f), horizontalArrangement = Arrangement.End) {
-                OutlinedButton(onClick = { hub.send(RemoteCommand.ToggleStereo) }) {
-                    Icon(Icons.Rounded.ViewInAr, null, Modifier.size(18.dp))
-                    Spacer(Modifier.width(6.dp))
-                    Text(if (status.stereo) "В 2D" else "В VR")
-                }
-            }
+            // 2D включается только пальцем на телефоне — пульт этого не делает.
+            Spacer(Modifier.weight(1f))
         }
 
         FormatSelector(status, hub)
@@ -426,7 +420,7 @@ private fun FormatSelector(status: PlayerStatus, hub: RemoteHub) {
         }
     }
     Text(
-        "Клавиши: Пробел — пауза, ←/→ — 10 с (с Shift — 30 с), PgUp/PgDn — видео, R — рецентр, V — 2D/VR.",
+        "Клавиши: Пробел — пауза, ←/→ — 10 с (с Shift — 30 с), PgUp/PgDn — видео, R — рецентр.",
         style = MaterialTheme.typography.bodySmall,
         color = MaterialTheme.colorScheme.onSurfaceVariant,
     )

@@ -314,7 +314,8 @@ class PlayerActivity : ComponentActivity() {
             RemoteCommand.PreviousFile -> menuActions.previousFile()
             RemoteCommand.NextFile -> menuActions.nextFile()
             RemoteCommand.Recenter -> renderer.recenter()
-            RemoteCommand.ToggleStereo -> toggleStereoMode()
+            // 2D включается только пальцем на телефоне.
+            RemoteCommand.ToggleStereo -> Unit
             is RemoteCommand.SetFormat -> VideoFormat.decode(command.format)?.let(menuActions::setFormat)
             is RemoteCommand.Open -> openFromDesktop(server, command)
             is RemoteCommand.OpenDarkframe -> openFromDarkframe(server, command)

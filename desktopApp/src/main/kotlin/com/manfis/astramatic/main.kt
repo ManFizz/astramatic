@@ -43,7 +43,6 @@ fun main() {
                     Key.PageUp -> RemoteCommand.PreviousFile
                     Key.PageDown -> RemoteCommand.NextFile
                     Key.R -> RemoteCommand.Recenter
-                    Key.V -> RemoteCommand.ToggleStereo
                     else -> null
                 } ?: return@Window false
                 hub.send(command)
