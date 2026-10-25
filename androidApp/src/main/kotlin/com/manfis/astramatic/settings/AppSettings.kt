@@ -45,8 +45,15 @@ class AppSettings private constructor(private val prefs: SharedPreferences) {
     /** Режим «лёжа»: рецентр поворачивает картинку и вверх-вниз, туда же ставится меню. */
     var recenterPitch by pref("recenter_pitch", false)
 
-    /** Слайд-шоу фото: секунд на кадр, 0 — выключено. */
-    var slideshowSeconds by pref("slideshow_seconds", 0)
+    /** Слайд-шоу фото: включается в плеере, [slideshowSeconds] — секунд на кадр. */
+    var slideshow by pref("slideshow", false)
+    var slideshowSeconds by pref("slideshow_interval", 5)
+
+    /** Повтор: имя [RepeatMode]. */
+    var repeatMode by pref("repeat_mode", RepeatMode.Off.name)
+
+    /** Случайный порядок файлов папки. */
+    var shuffle by pref("shuffle", false)
 
     /** Формат файлов без тегов в имени, [com.manfis.astramatic.model.VideoFormat.encode]. */
     var defaultVideoFormat by pref("default_video_format", "Dome180|SideBySide|180|0")
@@ -91,4 +98,11 @@ class AppSettings private constructor(private val prefs: SharedPreferences) {
             ).also { instance = it }
         }
     }
+}
+
+/** Что делать в конце файла (и у краёв папки). */
+enum class RepeatMode(val title: String) {
+    Off("Повтор выкл."),
+    All("Повтор папки"),
+    One("Повтор файла"),
 }

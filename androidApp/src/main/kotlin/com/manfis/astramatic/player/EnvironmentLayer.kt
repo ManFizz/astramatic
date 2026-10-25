@@ -79,10 +79,26 @@ class EnvironmentLayer(private val customFile: File) {
         var mode = environment
         if (mode == Environment.Black || program == 0) return
         if (mode == Environment.Custom && !ensureCustom()) mode = Environment.Space
+        drawMode(mode.ordinal, mvp, videoTexture, videoTransform, uvRect, tint)
+    }
 
+    /** Калибровочная комната для настройки шлема: стены в сетку, на передней — крест и круги. */
+    fun drawCalibration(mvp: FloatArray, videoTexture: Int, videoTransform: FloatArray, uvRect: FloatArray) {
+        if (program == 0) return
+        drawMode(CALIBRATION_MODE, mvp, videoTexture, videoTransform, uvRect, tint = false)
+    }
+
+    private fun drawMode(
+        mode: Int,
+        mvp: FloatArray,
+        videoTexture: Int,
+        videoTransform: FloatArray,
+        uvRect: FloatArray,
+        tint: Boolean,
+    ) {
         GLES20.glUseProgram(program)
         GLES20.glUniformMatrix4fv(uMvp, 1, false, mvp, 0)
-        GLES20.glUniform1i(uMode, mode.ordinal)
+        GLES20.glUniform1i(uMode, mode)
         GLES20.glUniform1f(uTint, if (tint) 1f else 0f)
         GLES20.glUniformMatrix4fv(uTexMatrix, 1, false, videoTransform, 0)
         GLES20.glUniform4f(uUvRect, uvRect[0], uvRect[1], uvRect[2], uvRect[3])
@@ -128,6 +144,7 @@ class EnvironmentLayer(private val customFile: File) {
 
     companion object {
         const val RADIUS = 30f
+        private const val CALIBRATION_MODE = 5
 
         /** Сторона панорамы окружения: больше — тяжелее, а разницы в шлеме почти нет. */
         const val CUSTOM_MAX_WIDTH = 4096
@@ -142,7 +159,8 @@ void main() {
 }
 """
 
-        // Режимы — порядковые номера Environment: 1 кинозал, 2 космос, 3 закат, 4 своя панорама.
+        // Режимы — порядковые номера Environment: 1 кинозал, 2 космос, 3 закат, 4 своя панорама;
+        // 5 — калибровочная комната.
         private const val FRAGMENT_SHADER = """#extension GL_OES_EGL_image_external : require
 #ifdef GL_FRAGMENT_PRECISION_HIGH
 precision highp float;
@@ -215,6 +233,29 @@ void main() {
         // Своя панорама (равнопромежуточная): строка 0 картинки — верх.
         vec2 uv = vec2(atan(d.x, -d.z) / 6.2831853 + 0.5, asin(clamp(d.y, -1.0, 1.0)) / 3.1415927 + 0.5);
         color = texture2D(uCustom, vec2(uv.x, 1.0 - uv.y)).rgb;
+    } else if (uMode == 5) {
+        // Куб-комната: прямые линии стен в линзах должны оставаться прямыми — так видно искажения.
+        vec3 a = abs(d);
+        vec2 uv;
+        bool front = false;
+        if (a.x >= a.y && a.x >= a.z) {
+            uv = d.zy / a.x;
+        } else if (a.y >= a.z) {
+            uv = d.xz / a.y;
+        } else {
+            uv = d.xy / a.z;
+            front = d.z < 0.0;
+        }
+        vec2 g = abs(fract(uv * 4.0 + 0.5) - 0.5);
+        float line = 1.0 - smoothstep(0.02, 0.045, min(g.x, g.y));
+        color = mix(vec3(0.02, 0.03, 0.07), vec3(0.3, 0.5, 0.9), line);
+        if (front) {
+            // Крест и круги по центру передней стены: не должны двоиться и плыть.
+            float crossLine = 1.0 - smoothstep(0.004, 0.009, min(abs(uv.x), abs(uv.y)));
+            float r = length(uv);
+            float ring = 1.0 - smoothstep(0.004, 0.009, abs(fract(r * 4.0 + 0.5) - 0.5) / 4.0);
+            color = mix(color, vec3(1.0, 0.6, 0.2), max(crossLine, ring * step(r, 0.9)));
+        }
     }
     gl_FragColor = vec4(color, 1.0);
 }

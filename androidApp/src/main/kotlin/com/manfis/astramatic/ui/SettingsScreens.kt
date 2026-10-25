@@ -62,15 +62,12 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
             checked = settings.autoplayNext,
         ) { settings.autoplayNext = it }
 
-        if (settings.slideshowSeconds > 0) {
-            Text("Слайд-шоу фото: ${settings.slideshowSeconds} с на кадр")
-        } else {
-            Text("Слайд-шоу фото: выключено")
-        }
+        // Включается кнопкой в плеере, здесь — только скорость.
+        Text("Слайд-шоу фото: ${settings.slideshowSeconds} с на кадр")
         Slider(
             value = settings.slideshowSeconds.toFloat(),
-            onValueChange = { settings.slideshowSeconds = it.roundToInt() },
-            valueRange = 0f..30f,
+            onValueChange = { settings.slideshowSeconds = it.roundToInt().coerceAtLeast(2) },
+            valueRange = 2f..30f,
         )
 
         HorizontalDivider()

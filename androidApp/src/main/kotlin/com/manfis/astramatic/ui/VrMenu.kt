@@ -48,6 +48,7 @@ import kotlin.math.roundToInt
 import com.manfis.astramatic.headset.HeadsetScreen
 import com.manfis.astramatic.player.Playlist
 import com.manfis.astramatic.settings.RemoteAction
+import com.manfis.astramatic.settings.RepeatMode
 import com.manfis.astramatic.model.Projection
 import com.manfis.astramatic.model.StereoLayout
 import com.manfis.astramatic.model.VideoFormat
@@ -58,10 +59,11 @@ class VrMenuState {
     /** Компактная полоска управления воспроизведением или большое меню. */
     enum class Mode { Controls, Menu }
 
-    enum class Tab { Video, Files, Headset, Remote, Settings }
+    /** Home — главная с файлами; Video — формат текущего видео; остальные — настройки. */
+    enum class Tab { Home, Video, Headset, Remote, Settings }
 
     var mode by mutableStateOf(Mode.Menu)
-    var tab by mutableStateOf(Tab.Files)
+    var tab by mutableStateOf(Tab.Home)
 
     /** Имя открытого видео, null — видео ещё не выбрано. */
     var title by mutableStateOf<String?>(null)
@@ -110,6 +112,11 @@ interface VrMenuActions {
     fun play(playlist: Playlist)
     fun previousFile()
     fun nextFile()
+
+    /** Повтор: выкл → папка → файл. */
+    fun cycleRepeat()
+    fun toggleShuffle()
+    fun toggleSlideshow()
     fun headsetSaved()
     fun openMenu(tab: VrMenuState.Tab)
     fun hide()
@@ -117,7 +124,7 @@ interface VrMenuActions {
 }
 
 /** Высота полоски управления в шлеме: столько пикселей сверху виртуального дисплея показывает рендерер. */
-val ControlsHeightDp = 200.dp
+val ControlsHeightDp = 240.dp
 
 @Composable
 fun VrMenu(state: VrMenuState, actions: VrMenuActions) {
@@ -173,6 +180,8 @@ private fun ControlsLayer(state: VrMenuState, actions: VrMenuActions) {
 
 @Composable
 private fun ControlsBar(state: VrMenuState, actions: VrMenuActions) {
+    val context = LocalContext.current
+    val settings = remember { AppSettings.get(context) }
     var position by remember { mutableLongStateOf(actions.positionMs()) }
     var duration by remember { mutableLongStateOf(actions.durationMs()) }
     var playing by remember { mutableStateOf(actions.isPlaying()) }
@@ -188,12 +197,14 @@ private fun ControlsBar(state: VrMenuState, actions: VrMenuActions) {
         }
     }
 
-    val compact = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+    val big = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
+    val small = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
+    val bigText = MaterialTheme.typography.titleLarge
     Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 state.title ?: "",
-                style = MaterialTheme.typography.titleSmall,
+                style = MaterialTheme.typography.titleMedium,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
@@ -202,7 +213,7 @@ private fun ControlsBar(state: VrMenuState, actions: VrMenuActions) {
             if (!state.isImage) {
                 Text(
                     "${formatTime(dragging?.toLong() ?: position)} / ${formatTime(duration)}",
-                    style = MaterialTheme.typography.bodyMedium,
+                    style = MaterialTheme.typography.titleMedium,
                 )
             }
         }
@@ -217,34 +228,62 @@ private fun ControlsBar(state: VrMenuState, actions: VrMenuActions) {
                 valueRange = 0f..duration.coerceAtLeast(1).toFloat(),
             )
         } else {
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(8.dp))
         }
-        // Три зоны: служебные кнопки слева и справа равной ширины, перемотка и пауза — точно по центру.
+        // Главный ряд — крупно и точно по центру: файлы, перемотка, пауза.
+        Row(
+            Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+        ) {
+            TextButton(onClick = actions::previousFile, enabled = state.hasPrevious, contentPadding = big) {
+                Text("⏮", style = bigText)
+            }
+            if (!state.isImage) {
+                TextButton(onClick = { actions.seekBy(-30_000) }, contentPadding = big) { Text("−30", style = bigText) }
+                TextButton(onClick = { actions.seekBy(-10_000) }, contentPadding = big) { Text("−10", style = bigText) }
+            }
+            // У фото ⏯ — пауза слайд-шоу.
+            Button(onClick = actions::togglePlayback, contentPadding = PaddingValues(horizontal = 28.dp, vertical = 10.dp)) {
+                Text(if (playing) "⏸" else "▶", style = bigText)
+            }
+            if (!state.isImage) {
+                TextButton(onClick = { actions.seekBy(10_000) }, contentPadding = big) { Text("+10", style = bigText) }
+                TextButton(onClick = { actions.seekBy(30_000) }, contentPadding = big) { Text("+30", style = bigText) }
+            }
+            TextButton(onClick = actions::nextFile, enabled = state.hasNext, contentPadding = big) {
+                Text("⏭", style = bigText)
+            }
+        }
+        // Служебный ряд: вид слева, режимы по центру, переходы справа.
         Row(verticalAlignment = Alignment.CenterVertically) {
             Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                TextButton(onClick = actions::recenter, contentPadding = compact) { Text("Центр") }
-                TextButton(onClick = { actions.setZoom(state.zoom / ZOOM_STEP) }, contentPadding = compact) { Text("−") }
-                TextButton(onClick = { actions.setZoom(state.zoom * ZOOM_STEP) }, contentPadding = compact) { Text("+") }
+                TextButton(onClick = actions::recenter, contentPadding = small) { Text("Центр") }
+                TextButton(onClick = { actions.setZoom(state.zoom / ZOOM_STEP) }, contentPadding = small) { Text("−") }
+                TextButton(onClick = { actions.setZoom(state.zoom * ZOOM_STEP) }, contentPadding = small) { Text("+") }
                 // Из шлема 2D не включается: только пальцем, кнопкой на экране (как крестик).
-                if (!state.stereo) TextButton(onClick = actions::toggleStereo, contentPadding = compact) { Text("VR") }
+                if (!state.stereo) TextButton(onClick = actions::toggleStereo, contentPadding = small) { Text("VR") }
             }
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                TextButton(onClick = actions::previousFile, enabled = state.hasPrevious, contentPadding = compact) { Text("⏮") }
-                if (!state.isImage) {
-                    TextButton(onClick = { actions.seekBy(-30_000) }, contentPadding = compact) { Text("−30") }
-                    TextButton(onClick = { actions.seekBy(-10_000) }, contentPadding = compact) { Text("−10") }
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                val repeat = RepeatMode.entries.find { it.name == settings.repeatMode } ?: RepeatMode.Off
+                FilterChip(
+                    selected = repeat != RepeatMode.Off,
+                    onClick = actions::cycleRepeat,
+                    label = { Text(if (repeat == RepeatMode.One) "🔂 ${repeat.title}" else "🔁 ${repeat.title}") },
+                )
+                FilterChip(selected = settings.shuffle, onClick = actions::toggleShuffle, label = { Text("🔀 Случайно") })
+                if (state.isImage) {
+                    FilterChip(
+                        selected = settings.slideshow,
+                        onClick = actions::toggleSlideshow,
+                        label = { Text("Слайд-шоу ${settings.slideshowSeconds} с") },
+                    )
                 }
-                // У фото ⏯ — слайд-шоу.
-                Button(onClick = actions::togglePlayback, contentPadding = compact) { Text(if (playing) "⏸" else "▶") }
-                if (!state.isImage) {
-                    TextButton(onClick = { actions.seekBy(10_000) }, contentPadding = compact) { Text("+10") }
-                    TextButton(onClick = { actions.seekBy(30_000) }, contentPadding = compact) { Text("+30") }
-                }
-                TextButton(onClick = actions::nextFile, enabled = state.hasNext, contentPadding = compact) { Text("⏭") }
             }
-            Row(Modifier.weight(1f), horizontalArrangement = Arrangement.End) {
-                FilledTonalButton(onClick = { actions.openMenu(VrMenuState.Tab.Video) }, contentPadding = compact) {
-                    Text("☰ Меню")
+            Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.End)) {
+                TextButton(onClick = { actions.openMenu(VrMenuState.Tab.Video) }, contentPadding = small) { Text("Формат") }
+                FilledTonalButton(onClick = { actions.openMenu(VrMenuState.Tab.Home) }, contentPadding = small) {
+                    Text("🏠 Главная")
                 }
             }
         }
@@ -253,6 +292,10 @@ private fun ControlsBar(state: VrMenuState, actions: VrMenuActions) {
 
 // --- Меню -----------------------------------------------------------------------------------
 
+/**
+ * Главная — файлы, как в Play'a: с неё всё начинается и на неё возвращает «Назад».
+ * Настройки (общие, шлем, пульт) — отдельный раздел, формат текущего видео — тоже.
+ */
 @Composable
 private fun MenuContent(state: VrMenuState, actions: VrMenuActions) {
     Column(Modifier.fillMaxSize()) {
@@ -269,23 +312,37 @@ private fun MenuContent(state: VrMenuState, actions: VrMenuActions) {
                 }
             }
         }
+        val home = state.tab == VrMenuState.Tab.Home
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            // Вкладки прокручиваются вбок, если не влезают; кнопки справа всегда видны.
-            Row(
-                modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                if (state.title != null) TabChip(state, VrMenuState.Tab.Video, "🎬 Видео")
-                TabChip(state, VrMenuState.Tab.Files, "📁 Файлы")
-                TabChip(state, VrMenuState.Tab.Headset, "👓 Шлем")
-                TabChip(state, VrMenuState.Tab.Remote, "🎮 Пульт")
-                TabChip(state, VrMenuState.Tab.Settings, "⚙ Настройки")
+            if (home) {
+                Text("AstraMatic", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(start = 8.dp))
+                Spacer(Modifier.weight(1f))
+            } else {
+                TextButton(onClick = { state.tab = VrMenuState.Tab.Home }) { Text("← Главная") }
+                // Разделы настроек — вкладками; прокручиваются вбок, если не влезают.
+                Row(
+                    modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    if (state.tab == VrMenuState.Tab.Video) {
+                        Text("Формат видео", style = MaterialTheme.typography.titleMedium)
+                    } else {
+                        TabChip(state, VrMenuState.Tab.Settings, "⚙ Общие")
+                        TabChip(state, VrMenuState.Tab.Headset, "👓 Шлем")
+                        TabChip(state, VrMenuState.Tab.Remote, "🎮 Пульт")
+                    }
+                }
             }
-            if (state.title != null) Button(onClick = actions::hide) { Text("К видео") }
+            if (state.title != null) {
+                if (home) OutlinedButton(onClick = { state.tab = VrMenuState.Tab.Video }) { Text("Формат") }
+                Button(onClick = actions::hide) { Text("▶ К видео") }
+            }
+            if (home) FilledTonalButton(onClick = { state.tab = VrMenuState.Tab.Settings }) { Text("⚙ Настройки") }
             // Выйти из VR и включить 2D можно только пальцем — крестиком и кнопкой на экране.
             if (!state.stereo) {
                 OutlinedButton(onClick = actions::toggleStereo) { Text("VR") }
@@ -295,19 +352,19 @@ private fun MenuContent(state: VrMenuState, actions: VrMenuActions) {
         HorizontalDivider()
         Box(Modifier.fillMaxWidth().weight(1f)) {
             when (state.tab) {
-                VrMenuState.Tab.Video -> VideoTab(state, actions)
-                VrMenuState.Tab.Files -> LibraryApp(
+                VrMenuState.Tab.Home -> LibraryApp(
                     onPlay = actions::play,
                     state = state.library,
                     embedded = true,
                     allowEditing = !state.stereo,
                 )
+                VrMenuState.Tab.Video -> VideoTab(state, actions)
                 VrMenuState.Tab.Headset -> HeadsetScreen(
-                    onBack = {
-                        state.tab = if (state.title != null) VrMenuState.Tab.Video else VrMenuState.Tab.Files
-                    },
+                    onBack = { state.tab = VrMenuState.Tab.Home },
                     onSaved = actions::headsetSaved,
                     closeOnSave = false,
+                    // В шлеме — на лету, вокруг калибровочная комната.
+                    live = state.stereo,
                 )
                 VrMenuState.Tab.Remote -> RemoteScreen(state)
                 VrMenuState.Tab.Settings -> SettingsScreen()

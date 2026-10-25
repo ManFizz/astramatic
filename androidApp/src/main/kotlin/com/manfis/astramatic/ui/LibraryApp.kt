@@ -114,7 +114,8 @@ fun LibraryApp(
     fun push(screen: Screen) = backStack.add(screen)
     fun pop() = backStack.removeAt(backStack.lastIndex)
 
-    BackHandler(enabled = backStack.size > 1) { pop() }
+    // Внутри плеера «Назад» разбирает сам плеер: у него своя цепочка до главной.
+    BackHandler(enabled = !embedded && backStack.size > 1) { pop() }
 
     fun item(
         uri: Uri,

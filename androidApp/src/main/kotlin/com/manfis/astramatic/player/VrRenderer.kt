@@ -50,6 +50,9 @@ class VrRenderer(
 
     @Volatile var panelVisible = false
 
+    /** Настройка шлема: вокруг калибровочная комната, видео не показываем. */
+    @Volatile var calibration = false
+
     /**
      * Какую часть виртуального дисплея показывать и где.
      * [visibleHeightPx] — сколько пикселей сверху дисплея видно, [width] — ширина в метрах,
@@ -57,8 +60,8 @@ class VrRenderer(
      */
     enum class PanelLayout(val visibleHeightPx: Int, val width: Float, val centerY: Float) {
         Menu(PANEL_HEIGHT_PX, 2.2f, 0f),
-        /** Полоска управления: верхние 300 px (200 dp при плотности панели), чуть ниже взгляда. */
-        Controls(300, 1.8f, -0.55f);
+        /** Полоска управления: верхние 360 px (240 dp при плотности панели), чуть ниже взгляда. */
+        Controls(360, 2.0f, -0.6f);
 
         val height: Float get() = width * visibleHeightPx / PANEL_WIDTH_PX
         val visibleFraction: Float get() = visibleHeightPx.toFloat() / PANEL_HEIGHT_PX
@@ -138,11 +141,14 @@ class VrRenderer(
     private var uBrightness = 0
 
     private val recenterRequested = AtomicBoolean(true)
+    private val centerOnPanelRequested = AtomicBoolean(false)
+    private val placePanelRequested = AtomicBoolean(true)
+
     /**
-     * Сколько кадров подряд ставить панель перед взглядом. Не один: сразу после запуска
-     * трекинг головы ещё не определился с направлением, и панель оказалась бы где-то сбоку.
+     * Первые кадры после запуска трекинг головы ещё не определился с направлением. Пока он устаканивается,
+     * панель не показываем (иначе она «тянется» за взглядом), а ставим и центрируем видео один раз — после.
      */
-    private val placePanelFrames = AtomicInteger(PLACE_PANEL_FRAMES)
+    private val settleFrames = AtomicInteger(SETTLE_FRAMES)
 
     private val headView = FloatArray(16)
     private var videoYawDeg = 0f
@@ -168,8 +174,14 @@ class VrRenderer(
      */
     fun recenter() = recenterRequested.set(true)
 
+    /** Повернуть видео к панели: файл выбран в меню — пусть начнётся там, где меню. */
+    fun centerOnPanel() = centerOnPanelRequested.set(true)
+
     /** Поставить панель перед взглядом. */
-    fun placePanelInFront() = placePanelFrames.set(PLACE_PANEL_FRAMES)
+    fun placePanelInFront() = placePanelRequested.set(true)
+
+    /** Трекинг ещё устаканивается после запуска: панель не видна. */
+    private val settling get() = settleFrames.get() > 0
 
     override fun onSurfaceCreated(config: EGLConfig?) {
         textureProgram = GlUtil.program(TEXTURE_VERTEX_SHADER, TEXTURE_FRAGMENT_SHADER)
@@ -212,12 +224,17 @@ class VrRenderer(
         }
 
         if (!lookYawDeg.isNaN()) {
-            if (recenterRequested.getAndSet(false)) {
+            if (settling) {
+                settleFrames.decrementAndGet()
+                if (recenterRequested.get()) {
+                    videoYawDeg = lookYawDeg
+                    videoPitchDeg = lookPitchDeg
+                }
+            } else if (recenterRequested.getAndSet(false)) {
                 videoYawDeg = lookYawDeg
                 videoPitchDeg = lookPitchDeg
             }
-            if (placePanelFrames.get() > 0) {
-                placePanelFrames.decrementAndGet()
+            if (settling || placePanelRequested.getAndSet(false)) {
                 panelYawDeg = lookYawDeg
                 panelPitchDeg = lookPitchDeg
             } else if (panelLayout == PanelLayout.Controls) {
@@ -231,6 +248,11 @@ class VrRenderer(
             }
         }
 
+        if (!settling && centerOnPanelRequested.getAndSet(false)) {
+            videoYawDeg = panelYawDeg
+            videoPitchDeg = panelPitchDeg
+        }
+
         updateVideoModel(format)
         val layout = panelLayout
         Matrix.setRotateM(panelRotation, 0, panelYawDeg, 0f, 1f, 0f)
@@ -238,7 +260,7 @@ class VrRenderer(
         Matrix.translateM(panelModel, 0, panelRotation, 0, 0f, layout.centerY, -PANEL_DISTANCE)
         Matrix.scaleM(panelModel, 0, layout.width, layout.height, 1f)
 
-        gaze = if (panelVisible) computeGaze(layout) else null
+        gaze = if (panelVisible && !settling) computeGaze(layout) else null
     }
 
     private fun wrapDegrees(deg: Float): Float = ((deg + 540f) % 360f) - 180f
@@ -275,9 +297,9 @@ class VrRenderer(
         zoomed[5] *= zoom
 
         drawEnvironment(eye)
-        if (hasVideo) drawVideo(eye, zoomed)
+        if (hasVideo && !calibration) drawVideo(eye, zoomed)
 
-        if (panelVisible && panel.isReady) {
+        if (panelVisible && panel.isReady && !settling) {
             GLES20.glEnable(GLES20.GL_BLEND)
             // Кадры виртуального дисплея с премультиплицированной альфой (прозрачные углы панели).
             GLES20.glBlendFunc(GLES20.GL_ONE, GLES20.GL_ONE_MINUS_SRC_ALPHA)
@@ -307,6 +329,10 @@ class VrRenderer(
 
     /** Окружение не рисуем там, где его всё равно целиком закроет видео 360°. */
     private fun drawEnvironment(eye: CardboardView.Eye) {
+        if (calibration) {
+            drawCalibration(eye)
+            return
+        }
         val format = format
         val covered = hasVideo && video.isReady &&
             (format.projection == Projection.Sphere360 || format.projection == Projection.Eac360)
@@ -325,6 +351,18 @@ class VrRenderer(
         Matrix.multiplyMM(mvp, 0, zoomed, 0, rotation, 0)
         val tint = settings.ambientLight && hasVideo && video.isReady && format.projection == Projection.Flat
         environment.draw(mode, mvp, video.id, video.transform, rect, tint)
+    }
+
+    /** Комната стоит передней стеной к меню и без приближения: так честно видны линзы. */
+    private fun drawCalibration(eye: CardboardView.Eye) {
+        Matrix.setRotateM(environmentModel, 0, panelYawDeg, 0f, 1f, 0f)
+        eye.eyeView.copyInto(viewModel)
+        viewModel[12] = 0f
+        viewModel[13] = 0f
+        viewModel[14] = 0f
+        Matrix.multiplyMM(rotation, 0, viewModel, 0, environmentModel, 0)
+        Matrix.multiplyMM(mvp, 0, eye.getPerspective(Z_NEAR, Z_FAR), 0, rotation, 0)
+        environment.drawCalibration(mvp, video.id, video.transform, floatArrayOf(0f, 0f, 1f, 1f))
     }
 
     /** Часть кадра для глаза: смещение и размер по u и v. Левый глаз сверху; v = 0 внизу кадра. */
@@ -469,7 +507,7 @@ class VrRenderer(
         const val PANEL_DENSITY_DPI = 240
 
         private const val PANEL_DISTANCE = 2.5f
-        private const val PLACE_PANEL_FRAMES = 45
+        private const val SETTLE_FRAMES = 45
         /** Полоска шириной ±20° от центра; дальше 30° — уже точно смотрят не на неё. */
         private const val CONTROLS_FOLLOW_DEG = 30f
         private const val CONTROLS_FOLLOW_SPEED = 0.08f

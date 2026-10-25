@@ -75,6 +75,8 @@ import com.manfis.astramatic.remote.VideoFiles
 import com.manfis.astramatic.remote.RemoteCommand
 import com.manfis.astramatic.ui.DefaultFormat
 import kotlin.math.abs
+import kotlin.random.Random
+import com.manfis.astramatic.settings.RepeatMode
 
 /**
  * VR-оболочка: видео, меню (плеер, файлы, шлем) и переключение VR ⇄ 2D.
@@ -150,12 +152,18 @@ class PlayerActivity : ComponentActivity() {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 if (playbackState != Player.STATE_ENDED || playlist?.current?.isImage == true) return
                 savePosition()
-                val next = playlist?.moved(1)
-                if (settings.autoplayNext && next != null) openPlaylist(next) else showControls()
+                if (repeatMode == RepeatMode.One) {
+                    player.seekTo(0)
+                    player.play()
+                    return
+                }
+                val next = playlist?.let { step(it, 1) }
+                val auto = settings.autoplayNext || repeatMode == RepeatMode.All || settings.shuffle
+                if (auto && next != null) openPlaylist(next) else showControls()
             }
 
             override fun onPlayerError(error: PlaybackException) {
-                showNotice(error.describe(), VrMenuState.Tab.Files)
+                showNotice(error.describe(), VrMenuState.Tab.Home)
             }
         })
 
@@ -215,8 +223,9 @@ class PlayerActivity : ComponentActivity() {
         uiHost = VrUiHost(this, screenOverlay) { VrMenu(menu, menuActions) }
         updateModeButton()
 
-        // «Назад» закрывает меню и полоску, но не выходит из VR: выход — только крестиком, пальцем.
-        // В 2D без видео и с открытыми файлами «Назад» выходит, как в обычном приложении.
+        lifecycleScope.launch {
+            snapshotFlow { menu.tab to menu.mode }.collect { updateCalibration() }
+        }
         lifecycleScope.launch {
             snapshotFlow { menu.capturingKey }.collect {
                 captureStartedAt = SystemClock.uptimeMillis()
@@ -224,16 +233,12 @@ class PlayerActivity : ComponentActivity() {
             }
         }
 
-        onBackPressedDispatcher.addCallback(this) {
-            when {
-                uiHost.place == VrUiHost.Place.Hidden -> showControls()
-                menu.title != null -> hideMenu()
-                !stereoMode -> finish()
-            }
-        }
+        // «Назад» ведёт к главной (файлам) и дальше неё не уходит: из VR выходят только крестиком, пальцем.
+        // В 2D на главной «Назад» выходит, как в обычном приложении.
+        onBackPressedDispatcher.addCallback(this) { goBack() }
 
         val pending = PendingPlaylist.take()
-        if (pending != null) openPlaylist(pending) else showMenu(VrMenuState.Tab.Files)
+        if (pending != null) openPlaylist(pending) else showMenu(VrMenuState.Tab.Home)
     }
 
     private val menuActions = object : VrMenuActions {
@@ -276,9 +281,26 @@ class PlayerActivity : ComponentActivity() {
         }
 
         override fun setAsEnvironment(): String = saveEnvironment()
-        override fun play(playlist: Playlist) = openPlaylist(playlist)
-        override fun previousFile() { playlist?.moved(-1)?.let(::openPlaylist) }
-        override fun nextFile() { playlist?.moved(1)?.let(::openPlaylist) }
+        // Выбрано в меню — видео встаёт там, где меню.
+        override fun play(playlist: Playlist) = openPlaylist(playlist, fromMenu = true)
+        override fun previousFile() { playlist?.let { step(it, -1) }?.let(::openPlaylist) }
+        override fun nextFile() { playlist?.let { step(it, 1) }?.let(::openPlaylist) }
+
+        override fun cycleRepeat() {
+            settings.repeatMode = RepeatMode.entries[(repeatMode.ordinal + 1) % RepeatMode.entries.size].name
+            updateNavigation()
+        }
+
+        override fun toggleShuffle() {
+            settings.shuffle = !settings.shuffle
+            updateNavigation()
+        }
+
+        override fun toggleSlideshow() {
+            settings.slideshow = !settings.slideshow
+            slideshowPaused = false
+            scheduleSlideshow()
+        }
         // Только на потоке отрисовки: SDK пользуется параметрами шлема там же, и перечитывание
         // с главного потока роняло приложение посреди кадра.
         override fun headsetSaved() = cardboardView.queueEvent { cardboardView.loadDeviceParams() }
@@ -287,7 +309,34 @@ class PlayerActivity : ComponentActivity() {
         override fun exit() = finish()
     }
 
-    private fun openPlaylist(next: Playlist) {
+    private val repeatMode get() = RepeatMode.entries.find { it.name == settings.repeatMode } ?: RepeatMode.Off
+
+    /**
+     * Соседний файл с учётом режимов: случайный — любой другой, «повтор папки» — по кругу.
+     * null — дальше некуда.
+     */
+    private fun step(list: Playlist, delta: Int): Playlist? {
+        val size = list.items.size
+        if (settings.shuffle && size > 1) {
+            val other = Random.nextInt(size - 1)
+            return list.copy(index = if (other >= list.index) other + 1 else other)
+        }
+        list.moved(delta)?.let { return it }
+        if (repeatMode != RepeatMode.All || size < 2) return null
+        return list.copy(index = if (delta > 0) 0 else list.items.lastIndex)
+    }
+
+    private fun updateNavigation() {
+        val list = playlist ?: return
+        menu.hasPrevious = step(list, -1) != null
+        menu.hasNext = step(list, 1) != null
+    }
+
+    /**
+     * Видео открывается в том же направлении, что и предыдущее: смотрели вбок — центр не съезжает.
+     * [fromMenu] — выбрано в меню: тогда видео встаёт там, где меню.
+     */
+    private fun openPlaylist(next: Playlist, fromMenu: Boolean = false) {
         savePosition()
         val wasImage = playlist?.current?.isImage == true
         playlist = next
@@ -311,14 +360,13 @@ class PlayerActivity : ComponentActivity() {
         if (settings.keepHistory) history.opened(item)
         menu.isImage = item.isImage
         menu.title = item.title
-        menu.hasPrevious = next.hasPrevious
-        menu.hasNext = next.hasNext
+        updateNavigation()
         applyFormat(formats.get(item.uri) ?: item.format)
         handler.removeCallbacks(saveTick)
         handler.postDelayed(saveTick, SAVE_INTERVAL_MS)
         renderer.hasVideo = true
-        renderer.recenter()
-        menu.tab = VrMenuState.Tab.Video
+        if (fromMenu) renderer.centerOnPanel()
+        menu.tab = VrMenuState.Tab.Home
         hideMenu()
     }
 
@@ -395,15 +443,15 @@ class PlayerActivity : ComponentActivity() {
         }
     }
 
-    private fun slideshowRunning() = settings.slideshowSeconds > 0 && !slideshowPaused
+    private fun slideshowRunning() = settings.slideshow && !slideshowPaused
 
     private fun scheduleSlideshow() {
         handler.removeCallbacks(slideshowTick)
-        if (slideshowRunning()) handler.postDelayed(slideshowTick, settings.slideshowSeconds * 1000L)
+        if (slideshowRunning()) handler.postDelayed(slideshowTick, settings.slideshowSeconds.coerceAtLeast(2) * 1000L)
     }
 
     private val slideshowTick = Runnable {
-        if (playlist?.current?.isImage == true && slideshowRunning()) playlist?.moved(1)?.let(::openPlaylist)
+        if (playlist?.current?.isImage == true && slideshowRunning()) playlist?.let { step(it, 1) }?.let(::openPlaylist)
     }
 
     /**
@@ -525,7 +573,7 @@ class PlayerActivity : ComponentActivity() {
 
     /** Полоска управления воспроизведением. Без видео управлять нечем — тогда меню. */
     private fun showControls() {
-        if (menu.title == null) showMenu(VrMenuState.Tab.Files) else showPanel(VrMenuState.Mode.Controls)
+        if (menu.title == null) showMenu(VrMenuState.Tab.Home) else showPanel(VrMenuState.Mode.Controls)
     }
 
     private fun showPanel(mode: VrMenuState.Mode) {
@@ -543,7 +591,29 @@ class PlayerActivity : ComponentActivity() {
         } else {
             uiHost.showOnScreen()
         }
+        updateCalibration()
         updateModeButton()
+    }
+
+    /**
+     * «Назад» — шаг к главной: отмена назначения кнопки → из видео на главную → из настроек на главную →
+     * вверх по папкам. На главной в VR ничего не делает, в 2D выходит.
+     */
+    private fun goBack() {
+        val library = menu.library.backStack
+        when {
+            menu.capturingKey != null -> menu.capturingKey = null
+            uiHost.place == VrUiHost.Place.Hidden || menu.mode == VrMenuState.Mode.Controls -> showMenu(VrMenuState.Tab.Home)
+            menu.tab != VrMenuState.Tab.Home -> menu.tab = VrMenuState.Tab.Home
+            library.size > 1 -> library.removeAt(library.lastIndex)
+            !stereoMode -> finish()
+        }
+    }
+
+    /** Калибровочная комната вокруг — пока в шлеме открыта настройка шлема. */
+    private fun updateCalibration() {
+        renderer.calibration = stereoMode && uiHost.place == VrUiHost.Place.Vr &&
+            menu.mode == VrMenuState.Mode.Menu && menu.tab == VrMenuState.Tab.Headset
     }
 
     /** Сообщение приложения: в меню, где его видно и в шлеме, и на экране. */
@@ -558,6 +628,7 @@ class PlayerActivity : ComponentActivity() {
         uiHost.hover(null, null)
         renderer.panelVisible = false
         uiHost.hide()
+        updateCalibration()
         updateModeButton()
     }
 
@@ -726,7 +797,7 @@ class PlayerActivity : ComponentActivity() {
             RemoteAction.Back -> onBackPressedDispatcher.onBackPressed()
             RemoteAction.Controls -> when {
                 uiHost.place == VrUiHost.Place.Hidden -> showControls()
-                menu.mode == VrMenuState.Mode.Controls -> showMenu(VrMenuState.Tab.Video)
+                menu.mode == VrMenuState.Mode.Controls -> showMenu(VrMenuState.Tab.Home)
                 menu.title != null -> hideMenu()
             }
             RemoteAction.PlayPause -> togglePlayback()
@@ -952,7 +1023,13 @@ class PlayerActivity : ComponentActivity() {
 
     private fun togglePlayback() {
         if (playlist?.current?.isImage == true) {
-            slideshowPaused = !slideshowPaused
+            // ⏯ у фото: включает слайд-шоу, если оно выключено, иначе ставит на паузу.
+            if (!settings.slideshow) {
+                settings.slideshow = true
+                slideshowPaused = false
+            } else {
+                slideshowPaused = !slideshowPaused
+            }
             scheduleSlideshow()
             return
         }
@@ -1009,7 +1086,7 @@ class PlayerActivity : ComponentActivity() {
         private const val AXIS_PRESS = 0.6f
         private const val AXIS_RELEASE = 0.3f
         private const val AXIS_TICK_MS = 50L
-        private const val AXIS_SCROLL_PER_TICK = 0.6f
+        private const val AXIS_SCROLL_PER_TICK = 0.3f
         private const val AXIS_ZOOM_PER_TICK = 0.035f
 
         /** Сторона фото не больше: 8K-панорама в памяти — уже около 130 МБ. */

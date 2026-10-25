@@ -18,6 +18,10 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberUpdatedState
+import kotlinx.coroutines.delay
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -31,12 +35,35 @@ import java.util.Locale
 /**
  * [onSaved] — параметры записаны (плееру пора их перечитать).
  * [closeOnSave] = false — остаться на экране после сохранения: в шлеме так удобнее подбирать значения.
+ * [live] — в шлеме: каждое изменение сразу применяется (виден результат на калибровочной сетке);
+ * «Отменить» или уход с экрана без «Сохранить» возвращают как было.
  */
 @Composable
-fun HeadsetScreen(onBack: () -> Unit, onSaved: () -> Unit = {}, closeOnSave: Boolean = false) {
+fun HeadsetScreen(onBack: () -> Unit, onSaved: () -> Unit = {}, closeOnSave: Boolean = false, live: Boolean = false) {
     val context = LocalContext.current
-    var params by remember { mutableStateOf(HeadsetParams.load(context)) }
+    var original by remember { mutableStateOf(HeadsetParams.load(context)) }
+    var params by remember { mutableStateOf(original) }
     var status by remember { mutableStateOf<String?>(null) }
+
+    if (live) {
+        var applied by remember { mutableStateOf(original) }
+        // Ползунок шлёт значения часто — применяем, когда он чуть замер.
+        LaunchedEffect(params) {
+            delay(LIVE_APPLY_DELAY_MS)
+            if (params != applied && params.save(context)) {
+                applied = params
+                onSaved()
+            }
+        }
+        // Ушли, не сохранив: в шлеме должно остаться то, что было сохранено.
+        val inDevice by rememberUpdatedState(applied)
+        val saved by rememberUpdatedState(original)
+        DisposableEffect(Unit) {
+            onDispose {
+                if (inDevice != saved && saved.save(context)) onSaved()
+            }
+        }
+    }
 
     Column(Modifier.fillMaxSize().safeContentPadding()) {
         Row(
@@ -49,22 +76,38 @@ fun HeadsetScreen(onBack: () -> Unit, onSaved: () -> Unit = {}, closeOnSave: Boo
         HorizontalDivider()
         HeadsetForm(
             params = params,
-            onChange = { params = it },
+            live = live,
+            onChange = {
+                params = it
+                status = null
+            },
             status = status,
             onSave = {
                 val saved = params.save(context)
-                status = if (saved) "Сохранено и применено." else "Не удалось сохранить."
+                status = if (saved) "Сохранено." else "Не удалось сохранить."
                 if (saved) {
+                    original = params
                     onSaved()
                     if (closeOnSave) onBack()
                 }
+            },
+            onCancel = {
+                params = original
+                status = "Вернул как было."
             },
         )
     }
 }
 
 @Composable
-private fun HeadsetForm(params: HeadsetParams, onChange: (HeadsetParams) -> Unit, status: String?, onSave: () -> Unit) {
+private fun HeadsetForm(
+    params: HeadsetParams,
+    live: Boolean,
+    onChange: (HeadsetParams) -> Unit,
+    status: String?,
+    onSave: () -> Unit,
+    onCancel: () -> Unit,
+) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -73,7 +116,12 @@ private fun HeadsetForm(params: HeadsetParams, onChange: (HeadsetParams) -> Unit
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         Text(
-            "Для шлемов без QR-кода. Меняйте по одному параметру и проверяйте в плеере.",
+            if (live) {
+                "Изменения видны сразу на сетке вокруг. Линии стен должны быть прямыми до самых краёв, " +
+                    "крест в центре — не двоиться. «Сохранить» — оставить, «Отменить» — вернуть как было."
+            } else {
+                "Для шлемов без QR-кода. Меняйте по одному параметру и проверяйте в плеере."
+            },
             style = MaterialTheme.typography.bodySmall,
         )
 
@@ -142,6 +190,7 @@ private fun HeadsetForm(params: HeadsetParams, onChange: (HeadsetParams) -> Unit
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = onSave) { Text("Сохранить") }
+            if (live) OutlinedButton(onClick = onCancel) { Text("Отменить") }
             OutlinedButton(onClick = { onChange(HeadsetParams.CardboardV1) }) { Text("Как Cardboard v1") }
         }
     }
@@ -165,3 +214,5 @@ private fun ParamSlider(
         Text(hint, style = MaterialTheme.typography.bodySmall)
     }
 }
+
+private const val LIVE_APPLY_DELAY_MS = 150L
