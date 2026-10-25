@@ -1,5 +1,7 @@
 package com.manfis.astramatic.ui
 
+import com.manfis.astramatic.player.VrRenderer
+
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -97,6 +99,21 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
             hint = "Стены мягко светятся цветом кадра плоского видео.",
             checked = settings.ambientLight,
         ) { settings.ambientLight = it }
+        Text("Меню: ${"%.1f".format(settings.menuDistance)} м")
+        Slider(
+            value = settings.menuDistance,
+            onValueChange = { settings.menuDistance = (it * 2).roundToInt() / 2f },
+            valueRange = VrRenderer.MIN_MENU_DISTANCE..VrRenderer.MAX_MENU_DISTANCE,
+        )
+        Text(
+            "Дальше — меньше сводить глаза при переходе от видео к меню. Размер меню на глаз тот же.",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        SwitchRow(
+            title = "Поправка по компасу",
+            hint = "Центр не уплывает со временем. Если рядом магниты или железо и картинка медленно плывёт — выключите.",
+            checked = settings.compassCorrection,
+        ) { settings.compassCorrection = it }
         SwitchRow(
             title = "Режим «лёжа»",
             hint = "Рецентр поворачивает картинку и вверх-вниз: можно смотреть в потолок. Меню встаёт туда же.",

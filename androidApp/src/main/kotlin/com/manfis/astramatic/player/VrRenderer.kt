@@ -35,6 +35,8 @@ class VrRenderer(
     private val onVideoSurfaceReady: (Surface) -> Unit,
     /** То же для панели интерфейса: в эту поверхность рисует виртуальный дисплей. */
     private val onPanelSurfaceReady: (Surface) -> Unit,
+    /** Поправка ухода поворота по компасу; null — компаса нет. */
+    private val compass: CompassDrift? = null,
 ) : CardboardView.Renderer {
 
     @Volatile var format = VideoFormat()
@@ -151,6 +153,9 @@ class VrRenderer(
     private val settleFrames = AtomicInteger(SETTLE_FRAMES)
 
     private val headView = FloatArray(16)
+
+    /** Во сколько раз меню дальше базовых [PANEL_DISTANCE] (и во столько же раз больше). */
+    private var panelScale = 1f
     private var videoYawDeg = 0f
     private var videoPitchDeg = 0f
     private var panelYawDeg = 0f
@@ -211,6 +216,7 @@ class VrRenderer(
         panel.update()
 
         headTransform.getHeadView(headView, 0)
+        correctDrift()
         // Направление взгляда в мире: третья строка матрицы вида со знаком минус.
         direction[0] = -headView[2]
         direction[1] = -headView[6]
@@ -257,10 +263,27 @@ class VrRenderer(
         val layout = panelLayout
         Matrix.setRotateM(panelRotation, 0, panelYawDeg, 0f, 1f, 0f)
         if (panelPitchDeg != 0f) Matrix.rotateM(panelRotation, 0, panelPitchDeg, 1f, 0f, 0f)
-        Matrix.translateM(panelModel, 0, panelRotation, 0, 0f, layout.centerY, -PANEL_DISTANCE)
-        Matrix.scaleM(panelModel, 0, layout.width, layout.height, 1f)
+        // Меню дальше — то же по видимому размеру, но глазам меньше сводиться при переходе от видео к меню.
+        val scale = settings.menuDistance.coerceIn(MIN_MENU_DISTANCE, MAX_MENU_DISTANCE) / PANEL_DISTANCE
+        panelScale = scale
+        Matrix.translateM(panelModel, 0, panelRotation, 0, 0f, layout.centerY * scale, -PANEL_DISTANCE * scale)
+        Matrix.scaleM(panelModel, 0, layout.width * scale, layout.height * scale, 1f)
 
         gaze = if (panelVisible && !settling) computeGaze(layout) else null
+    }
+
+    /**
+     * Гироскоп со временем уводит поворот в сторону — поворачиваем мир обратно на оценку ухода по компасу.
+     * Дальше всё (взгляд, глаза) считается уже по исправленному виду.
+     */
+    private fun correctDrift() {
+        val compass = compass ?: return
+        if (!settings.compassCorrection) {
+            compass.reset()
+            return
+        }
+        val drift = compass.update(headView)
+        if (drift != 0f) Matrix.rotateM(headView, 0, drift, 0f, 1f, 0f)
     }
 
     private fun wrapDegrees(deg: Float): Float = ((deg + 540f) % 360f) - 180f
@@ -272,16 +295,17 @@ class VrRenderer(
         Matrix.multiplyMV(localDirection, 0, rotation, 0, direction, 0)
         val dz = localDirection[2]
         if (dz > -0.01f) return null
-        val t = -PANEL_DISTANCE / dz
-        val u = localDirection[0] * t / layout.width + 0.5f
-        val v = 0.5f - (localDirection[1] * t - layout.centerY) / layout.height
+        val s = panelScale
+        val t = -PANEL_DISTANCE * s / dz
+        val u = localDirection[0] * t / (layout.width * s) + 0.5f
+        val v = 0.5f - (localDirection[1] * t - layout.centerY * s) / (layout.height * s)
         if (u !in 0f..1f || v !in 0f..1f) return null
 
         Matrix.translateM(
             cursorModel, 0, panelRotation, 0,
-            (u - 0.5f) * layout.width, (0.5f - v) * layout.height + layout.centerY, -PANEL_DISTANCE + CURSOR_LIFT,
+            (u - 0.5f) * layout.width * s, ((0.5f - v) * layout.height + layout.centerY) * s, (-PANEL_DISTANCE + CURSOR_LIFT) * s,
         )
-        Matrix.scaleM(cursorModel, 0, CURSOR_SIZE, CURSOR_SIZE, 1f)
+        Matrix.scaleM(cursorModel, 0, CURSOR_SIZE * s, CURSOR_SIZE * s, 1f)
         return Gaze(u * PANEL_WIDTH_PX, v * layout.visibleHeightPx)
     }
 
@@ -324,7 +348,10 @@ class VrRenderer(
         GLES20.glUseProgram(textureProgram)
         GLES20.glUniform4f(uUvRect, rect[0], rect[1], rect[2], rect[3])
         GLES20.glUniform1f(uBrightness, settings.brightness)
-        drawTextured(video, meshFor(format), eye, projection, videoModel, setUvRect = false)
+        drawTextured(
+            video, meshFor(format), eye, projection, videoModel, setUvRect = false,
+            atInfinity = format.projection != Projection.Flat,
+        )
     }
 
     /** Окружение не рисуем там, где его всё равно целиком закроет видео 360°. */
@@ -379,8 +406,18 @@ class VrRenderer(
         projection: FloatArray,
         model: FloatArray,
         setUvRect: Boolean = true,
+        /** Без сдвига глаз: для видео на сфере, у которого своя глубина. */
+        atInfinity: Boolean = false,
     ) {
-        Matrix.multiplyMM(viewModel, 0, eye.eyeView, 0, model, 0)
+        if (atInfinity) {
+            eye.eyeView.copyInto(rotation)
+            rotation[12] = 0f
+            rotation[13] = 0f
+            rotation[14] = 0f
+            Matrix.multiplyMM(viewModel, 0, rotation, 0, model, 0)
+        } else {
+            Matrix.multiplyMM(viewModel, 0, eye.eyeView, 0, model, 0)
+        }
         Matrix.multiplyMM(mvp, 0, projection, 0, viewModel, 0)
 
         GLES20.glUseProgram(textureProgram)
@@ -507,6 +544,8 @@ class VrRenderer(
         const val PANEL_DENSITY_DPI = 240
 
         private const val PANEL_DISTANCE = 2.5f
+        const val MIN_MENU_DISTANCE = 1.5f
+        const val MAX_MENU_DISTANCE = 12f
         private const val SETTLE_FRAMES = 45
         /** Полоска шириной ±20° от центра; дальше 30° — уже точно смотрят не на неё. */
         private const val CONTROLS_FOLLOW_DEG = 30f

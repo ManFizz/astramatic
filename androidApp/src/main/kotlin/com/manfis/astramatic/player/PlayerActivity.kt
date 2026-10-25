@@ -97,6 +97,7 @@ class PlayerActivity : ComponentActivity() {
     private val formats by lazy { FormatMemory(this) }
     private val history by lazy { History.get(this) }
     private val darkframes by lazy { DarkframeStore(this) }
+    private val compass by lazy { CompassDrift(this) }
 
     /** Сеть (позиции в Darkframe, списки с ПК) — не на главном потоке, по одному запросу за раз. */
     private val io = Executors.newSingleThreadExecutor()
@@ -172,6 +173,7 @@ class PlayerActivity : ComponentActivity() {
             environmentFile = environmentFile(this),
             onVideoSurfaceReady = { surface -> runOnUiThread { onVideoSurface(surface) } },
             onPanelSurfaceReady = { surface -> runOnUiThread { uiHost.setSurface(surface) } },
+            compass = compass.takeIf { it.available },
         )
 
         // Как в примере paperscope: GL-вид SDK умеет выполнить код завершения на GL-потоке при отсоединении.
@@ -1044,9 +1046,11 @@ class PlayerActivity : ComponentActivity() {
     override fun onResume() {
         super.onResume()
         cardboardView.onResume()
+        compass.start()
     }
 
     override fun onPause() {
+        compass.stop()
         cardboardView.onPause()
         super.onPause()
     }

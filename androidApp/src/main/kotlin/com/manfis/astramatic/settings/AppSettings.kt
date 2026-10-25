@@ -42,6 +42,12 @@ class AppSettings private constructor(private val prefs: SharedPreferences) {
     /** Яркость видео и фото, 0.5..1.5. */
     var brightness by pref("brightness", 1f)
 
+    /** Расстояние до меню в метрах; видимый размер от него не зависит. */
+    var menuDistance by pref("menu_distance", 6f)
+
+    /** Подтягивать поворот головы к компасу: центр не уплывает со временем. */
+    var compassCorrection by pref("compass_correction", true)
+
     /** Режим «лёжа»: рецентр поворачивает картинку и вверх-вниз, туда же ставится меню. */
     var recenterPitch by pref("recenter_pitch", false)
 
