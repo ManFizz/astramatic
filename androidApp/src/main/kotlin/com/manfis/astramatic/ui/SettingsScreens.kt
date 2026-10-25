@@ -109,6 +109,16 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
             "Дальше — меньше сводить глаза при переходе от видео к меню. Размер меню на глаз тот же.",
             style = MaterialTheme.typography.bodySmall,
         )
+        Text("Размер меню: ${(settings.menuSize * 100).roundToInt()}%")
+        Slider(
+            value = settings.menuSize,
+            onValueChange = { settings.menuSize = (it * 20).roundToInt() / 20f },
+            valueRange = VrRenderer.MIN_MENU_SIZE..VrRenderer.MAX_MENU_SIZE,
+        )
+        Text(
+            "В шлеме меню растягивается за уголки, а перетаскивается за полоску под ним: наведите точку и держите нажатие.",
+            style = MaterialTheme.typography.bodySmall,
+        )
         SwitchRow(
             title = "Поправка по компасу",
             hint = "Центр не уплывает со временем. Если рядом магниты или железо и картинка медленно плывёт — выключите.",

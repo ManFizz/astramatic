@@ -47,6 +47,15 @@ import com.manfis.astramatic.settings.AppSettings
 import kotlin.math.roundToInt
 import com.manfis.astramatic.headset.HeadsetScreen
 import com.manfis.astramatic.player.Playlist
+import com.manfis.astramatic.player.PlaylistItem
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
+import coil3.compose.AsyncImage
 import com.manfis.astramatic.settings.RemoteAction
 import com.manfis.astramatic.settings.RepeatMode
 import com.manfis.astramatic.model.Projection
@@ -87,6 +96,15 @@ class VrMenuState {
     /** Ждём кнопку пульта для этого действия. */
     var capturingKey by mutableStateOf<RemoteAction?>(null)
 
+    /** Что раскрыто над полоской плеера: быстрые настройки вида или очередь; null — ничего. */
+    enum class Sheet { View, Queue }
+
+    var sheet by mutableStateOf<Sheet?>(null)
+
+    /** Очередь — файлы папки, из которой открыт текущий, и номер текущего. */
+    var queue by mutableStateOf<List<PlaylistItem>>(emptyList())
+    var queueIndex by mutableStateOf(0)
+
     val library = LibraryState()
 }
 
@@ -117,6 +135,9 @@ interface VrMenuActions {
     fun cycleRepeat()
     fun toggleShuffle()
     fun toggleSlideshow()
+
+    /** Включить файл очереди с этим номером. */
+    fun playQueueItem(index: Int)
     fun headsetSaved()
     fun openMenu(tab: VrMenuState.Tab)
     fun hide()
@@ -125,6 +146,9 @@ interface VrMenuActions {
 
 /** Высота полоски управления в шлеме: столько пикселей сверху виртуального дисплея показывает рендерер. */
 val ControlsHeightDp = 240.dp
+
+/** Высота панели над полоской (вид, очередь); вместе с полоской рендерер показывает 490 dp сверху. */
+val SheetHeightDp = 250.dp
 
 @Composable
 fun VrMenu(state: VrMenuState, actions: VrMenuActions) {
@@ -157,9 +181,20 @@ private fun Panel(modifier: Modifier, shape: Shape, content: @Composable () -> U
 
 @Composable
 private fun ControlsLayer(state: VrMenuState, actions: VrMenuActions) {
+    val sheet = state.sheet
     if (state.stereo) {
-        // В шлеме рендерер показывает только верхнюю часть дисплея высотой ControlsHeightDp.
-        Panel(Modifier.fillMaxWidth().height(ControlsHeightDp), shape(state)) { ControlsBar(state, actions) }
+        // В шлеме рендерер показывает только верхнюю часть дисплея: полоску, а с раскрытой панелью —
+        // панель сверху и полоску под ней (нижний край там же, где у одной полоски).
+        val height = if (sheet == null) ControlsHeightDp else SheetHeightDp + ControlsHeightDp
+        Panel(Modifier.fillMaxWidth().height(height), shape(state)) {
+            Column {
+                if (sheet != null) {
+                    Box(Modifier.fillMaxWidth().height(SheetHeightDp)) { SheetContent(sheet, state, actions) }
+                    HorizontalDivider(Modifier.padding(horizontal = 16.dp))
+                }
+                ControlsBar(state, actions)
+            }
+        }
     } else {
         // На экране — полоска снизу, нажатие по видео над ней прячет её.
         Column(Modifier.fillMaxSize()) {
@@ -172,7 +207,13 @@ private fun ControlsLayer(state: VrMenuState, actions: VrMenuActions) {
                     },
             )
             Panel(Modifier.fillMaxWidth(), RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)) {
-                Box(Modifier.navigationBarsPadding()) { ControlsBar(state, actions) }
+                Column(Modifier.navigationBarsPadding()) {
+                    if (sheet != null) {
+                        Box(Modifier.fillMaxWidth().height(SheetHeightDp)) { SheetContent(sheet, state, actions) }
+                        HorizontalDivider(Modifier.padding(horizontal = 16.dp))
+                    }
+                    ControlsBar(state, actions)
+                }
             }
         }
     }
@@ -264,29 +305,220 @@ private fun ControlsBar(state: VrMenuState, actions: VrMenuActions) {
                 // Из шлема 2D не включается: только пальцем, кнопкой на экране (как крестик).
                 if (!state.stereo) TextButton(onClick = actions::toggleStereo, contentPadding = small) { Text("VR") }
             }
+            // Режимы — короткими значками: выбранный подсвечен, подпись только у включённого.
             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 val repeat = RepeatMode.entries.find { it.name == settings.repeatMode } ?: RepeatMode.Off
                 FilterChip(
                     selected = repeat != RepeatMode.Off,
                     onClick = actions::cycleRepeat,
-                    label = { Text(if (repeat == RepeatMode.One) "🔂 ${repeat.title}" else "🔁 ${repeat.title}") },
+                    label = {
+                        Text(
+                            when (repeat) {
+                                RepeatMode.Off -> "🔁"
+                                RepeatMode.All -> "🔁 Папка"
+                                RepeatMode.One -> "🔂 Файл"
+                            },
+                        )
+                    },
                 )
-                FilterChip(selected = settings.shuffle, onClick = actions::toggleShuffle, label = { Text("🔀 Случайно") })
+                FilterChip(selected = settings.shuffle, onClick = actions::toggleShuffle, label = { Text("🔀") })
                 if (state.isImage) {
                     FilterChip(
                         selected = settings.slideshow,
                         onClick = actions::toggleSlideshow,
-                        label = { Text("Слайд-шоу ${settings.slideshowSeconds} с") },
+                        label = { Text("⏱ ${settings.slideshowSeconds} с") },
                     )
                 }
             }
-            Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.End)) {
-                TextButton(onClick = { actions.openMenu(VrMenuState.Tab.Video) }, contentPadding = small) { Text("Формат") }
+            Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.End)) {
+                SheetChip(state, VrMenuState.Sheet.Queue, "▤ Очередь")
+                SheetChip(state, VrMenuState.Sheet.View, "◐ Вид")
                 FilledTonalButton(onClick = { actions.openMenu(VrMenuState.Tab.Home) }, contentPadding = small) {
-                    Text("🏠 Главная")
+                    Text("🏠")
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun SheetChip(state: VrMenuState, sheet: VrMenuState.Sheet, label: String) {
+    FilterChip(
+        selected = state.sheet == sheet,
+        onClick = { state.sheet = if (state.sheet == sheet) null else sheet },
+        label = { Text(label) },
+    )
+}
+
+@Composable
+private fun SheetContent(sheet: VrMenuState.Sheet, state: VrMenuState, actions: VrMenuActions) {
+    when (sheet) {
+        VrMenuState.Sheet.View -> ViewSheet(state, actions)
+        VrMenuState.Sheet.Queue -> QueueSheet(state, actions)
+    }
+}
+
+/** Быстрые настройки вида, как у Play'a: самое частое — в один взгляд, остальное — в «Формат». */
+@Composable
+private fun ViewSheet(state: VrMenuState, actions: VrMenuActions) {
+    val context = LocalContext.current
+    val settings = remember { AppSettings.get(context) }
+    val format = state.format
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 12.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Проекция", style = MaterialTheme.typography.labelLarge, modifier = Modifier.width(88.dp))
+            Projection.entries.forEach {
+                FilterChip(
+                    selected = format.projection == it,
+                    onClick = { actions.setFormat(format.copy(projection = it)) },
+                    label = { Text(projectionLabel(it)) },
+                )
+            }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text("Стерео", style = MaterialTheme.typography.labelLarge, modifier = Modifier.width(88.dp))
+            StereoLayout.entries.forEach {
+                FilterChip(
+                    selected = format.stereo == it,
+                    onClick = { actions.setFormat(format.copy(stereo = it)) },
+                    label = { Text(stereoLabel(it)) },
+                )
+            }
+            if (!state.isImage) {
+                Spacer(Modifier.width(16.dp))
+                Text("Скорость", style = MaterialTheme.typography.labelLarge)
+                SPEEDS.forEach { speed ->
+                    FilterChip(
+                        selected = state.speed == speed,
+                        onClick = { actions.setSpeed(speed) },
+                        label = { Text("${speed}×".replace(".0×", "×")) },
+                    )
+                }
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(24.dp)) {
+            Box(Modifier.weight(1f)) {
+                LabeledSlider(
+                    title = "Яркость ${(settings.brightness * 100).roundToInt()}%",
+                    hint = null,
+                    value = settings.brightness,
+                    range = 0.5f..1.5f,
+                    step = 0.05f,
+                ) { settings.brightness = it }
+            }
+            Box(Modifier.weight(1f)) {
+                if (format.projection == Projection.Flat) {
+                    LabeledSlider(
+                        title = "Экран ${"%.1f".format(settings.screenHeight)} м",
+                        hint = null,
+                        value = settings.screenHeight,
+                        range = 0.5f..8f,
+                        step = 0.1f,
+                    ) { settings.screenHeight = it }
+                } else {
+                    LabeledSlider(
+                        title = "Приближение ${"%.1f".format(state.zoom)}×",
+                        hint = null,
+                        value = state.zoom,
+                        range = MIN_ZOOM..MAX_ZOOM,
+                        step = 0.1f,
+                    ) { actions.setZoom(it) }
+                }
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(onClick = actions::resetFormat) { Text("Формат по имени файла") }
+            TextButton(onClick = { actions.openMenu(VrMenuState.Tab.Video) }) { Text("Все настройки вида →") }
+        }
+    }
+}
+
+/** Очередь — лентой превью: где мы и что дальше; нажатие включает файл. */
+@Composable
+private fun QueueSheet(state: VrMenuState, actions: VrMenuActions) {
+    val queue = state.queue
+    val listState = rememberLazyListState()
+    // Текущий — всегда в кадре, чуть правее левого края: видно и предыдущий.
+    LaunchedEffect(state.queueIndex, queue.size) {
+        if (queue.isNotEmpty()) listState.animateScrollToItem((state.queueIndex - 1).coerceAtLeast(0))
+    }
+    Column(Modifier.fillMaxSize().padding(top = 12.dp)) {
+        Row(Modifier.padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Очередь", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.width(12.dp))
+            Text(
+                if (queue.isEmpty()) "" else "${state.queueIndex + 1} из ${queue.size}",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        LazyRow(
+            state = listState,
+            modifier = Modifier.fillMaxWidth().padding(top = 10.dp),
+            contentPadding = PaddingValues(horizontal = 20.dp),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            itemsIndexed(queue) { index, item ->
+                QueueCard(item, current = index == state.queueIndex) { actions.playQueueItem(index) }
+            }
+        }
+    }
+}
+
+@Composable
+private fun QueueCard(item: PlaylistItem, current: Boolean, onClick: () -> Unit) {
+    val accent = MaterialTheme.colorScheme.primary
+    Column(
+        Modifier
+            .width(176.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick)
+            .padding(4.dp),
+    ) {
+        Box(
+            Modifier
+                .fillMaxWidth()
+                .height(99.dp)
+                .clip(RoundedCornerShape(10.dp))
+                .background(MaterialTheme.colorScheme.surfaceVariant)
+                .then(if (current) Modifier.border(3.dp, accent, RoundedCornerShape(10.dp)) else Modifier),
+        ) {
+            if (item.thumbnail != null) {
+                AsyncImage(
+                    model = item.thumbnail,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                Text(
+                    if (item.isImage) "🖼" else "🎬",
+                    Modifier.align(Alignment.Center),
+                    style = MaterialTheme.typography.headlineSmall,
+                )
+            }
+            if (current) {
+                Surface(
+                    color = accent,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                    shape = RoundedCornerShape(bottomEnd = 10.dp),
+                    modifier = Modifier.align(Alignment.TopStart),
+                ) {
+                    Text("▶ сейчас", style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp))
+                }
+            }
+        }
+        Text(
+            item.title,
+            style = MaterialTheme.typography.bodySmall,
+            maxLines = 2,
+            overflow = TextOverflow.Ellipsis,
+            color = if (current) accent else MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.padding(top = 4.dp, start = 2.dp, end = 2.dp),
+        )
     }
 }
 

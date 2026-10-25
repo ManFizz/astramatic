@@ -174,6 +174,7 @@ class PlayerActivity : ComponentActivity() {
             onVideoSurfaceReady = { surface -> runOnUiThread { onVideoSurface(surface) } },
             onPanelSurfaceReady = { surface -> runOnUiThread { uiHost.setSurface(surface) } },
             compass = compass.takeIf { it.available },
+            onMenuSizeChanged = { size -> runOnUiThread { settings.menuSize = size } },
         )
 
         // Как в примере paperscope: GL-вид SDK умеет выполнить код завершения на GL-потоке при отсоединении.
@@ -227,6 +228,9 @@ class PlayerActivity : ComponentActivity() {
 
         lifecycleScope.launch {
             snapshotFlow { menu.tab to menu.mode }.collect { updateCalibration() }
+        }
+        lifecycleScope.launch {
+            snapshotFlow { menu.sheet }.collect { updatePanelLayout() }
         }
         lifecycleScope.launch {
             snapshotFlow { menu.capturingKey }.collect {
@@ -298,6 +302,11 @@ class PlayerActivity : ComponentActivity() {
             updateNavigation()
         }
 
+        override fun playQueueItem(index: Int) {
+            val list = playlist ?: return
+            if (index in list.items.indices && index != list.index) openPlaylist(list.copy(index = index))
+        }
+
         override fun toggleSlideshow() {
             settings.slideshow = !settings.slideshow
             slideshowPaused = false
@@ -363,6 +372,8 @@ class PlayerActivity : ComponentActivity() {
         menu.isImage = item.isImage
         menu.title = item.title
         updateNavigation()
+        menu.queue = next.items
+        menu.queueIndex = next.index
         applyFormat(formats.get(item.uri) ?: item.format)
         handler.removeCallbacks(saveTick)
         handler.postDelayed(saveTick, SAVE_INTERVAL_MS)
@@ -578,13 +589,21 @@ class PlayerActivity : ComponentActivity() {
         if (menu.title == null) showMenu(VrMenuState.Tab.Home) else showPanel(VrMenuState.Mode.Controls)
     }
 
+    /** Какую часть виртуального дисплея и где показывает рендерер: меню, полоску или полоску с панелью. */
+    private fun updatePanelLayout() {
+        renderer.panelLayout = when {
+            menu.mode == VrMenuState.Mode.Menu -> VrRenderer.PanelLayout.Menu
+            menu.sheet != null -> VrRenderer.PanelLayout.ControlsSheet
+            else -> VrRenderer.PanelLayout.Controls
+        }
+    }
+
     private fun showPanel(mode: VrMenuState.Mode) {
         menu.mode = mode
+        if (mode == VrMenuState.Mode.Menu) menu.sheet = null
+        lastLookAtControls = SystemClock.uptimeMillis()
         if (stereoMode) {
-            renderer.panelLayout = when (mode) {
-                VrMenuState.Mode.Menu -> VrRenderer.PanelLayout.Menu
-                VrMenuState.Mode.Controls -> VrRenderer.PanelLayout.Controls
-            }
+            updatePanelLayout()
             renderer.placePanelInFront()
             renderer.panelVisible = true
             uiHost.showInVr()
@@ -626,6 +645,9 @@ class PlayerActivity : ComponentActivity() {
 
     private fun hideMenu() {
         menu.notice = null
+        menu.sheet = null
+        grabbing = false
+        renderer.grab = VrRenderer.Handle.None
         handler.removeCallbacks(hoverTick)
         uiHost.hover(null, null)
         renderer.panelVisible = false
@@ -644,8 +666,29 @@ class PlayerActivity : ComponentActivity() {
             val gaze = renderer.gaze
             uiHost.hover(gaze?.x, gaze?.y)
             updateDwell(gaze)
+            if (autoHideControls(gaze)) return
             handler.postDelayed(this, HOVER_INTERVAL_MS)
         }
+    }
+
+    /** Когда последний раз смотрели на полоску плеера (или трогали её). */
+    private var lastLookAtControls = 0L
+
+    /**
+     * Полоска сама уходит, если идёт видео, а смотрят не на неё: панель не раскрыта, ничего не держат.
+     * true — спрятали.
+     */
+    private fun autoHideControls(gaze: VrRenderer.Gaze?): Boolean {
+        val now = SystemClock.uptimeMillis()
+        val watching = menu.mode == VrMenuState.Mode.Controls && menu.sheet == null && !pressedOnPanel &&
+            !grabbing && gaze == null && player.isPlaying && playlist?.current?.isImage != true
+        if (!watching) {
+            lastLookAtControls = now
+            return false
+        }
+        if (now - lastLookAtControls < CONTROLS_AUTO_HIDE_MS) return false
+        hideMenu()
+        return true
     }
 
     // Нажатие взглядом: точка простояла на месте dwellMs — нажимаем. Следующее — только после сдвига взгляда.
@@ -685,6 +728,9 @@ class PlayerActivity : ComponentActivity() {
 
     private var pressStart = 0L
     private var pressedOnPanel = false
+
+    /** Держат уголок или полоску меню: нажатие не уходит в интерфейс. */
+    private var grabbing = false
     private var lastGaze: VrRenderer.Gaze? = null
 
     /** Пока нажатие держат на панели, точка следует за взглядом: так прокручиваются списки и двигаются ползунки. */
@@ -709,6 +755,12 @@ class PlayerActivity : ComponentActivity() {
 
     private fun triggerDown(time: Long) {
         pressStart = time
+        val handle = renderer.hoverHandle
+        if (uiHost.place == VrUiHost.Place.Vr && handle != VrRenderer.Handle.None) {
+            grabbing = true
+            renderer.grab = handle
+            return
+        }
         val gaze = renderer.gaze
         if (uiHost.place == VrUiHost.Place.Vr && gaze != null) {
             pressedOnPanel = true
@@ -719,6 +771,11 @@ class PlayerActivity : ComponentActivity() {
     }
 
     private fun triggerUp(time: Long, cancelled: Boolean) {
+        if (grabbing) {
+            grabbing = false
+            renderer.grab = VrRenderer.Handle.None
+            return
+        }
         if (pressedOnPanel) {
             pressedOnPanel = false
             handler.removeCallbacks(dragTick)
@@ -1073,6 +1130,7 @@ class PlayerActivity : ComponentActivity() {
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
     companion object {
+        private const val CONTROLS_AUTO_HIDE_MS = 4000L
         /** Своя панорама окружения: копия, уменьшенная до [EnvironmentLayer.CUSTOM_MAX_WIDTH]. */
         fun environmentFile(context: Context) = java.io.File(context.filesDir, "environment.jpg")
 

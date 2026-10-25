@@ -18,6 +18,7 @@ import javax.microedition.khronos.egl.EGLConfig
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.asin
+import kotlin.math.hypot
 import kotlin.math.atan2
 import java.io.File
 
@@ -37,6 +38,8 @@ class VrRenderer(
     private val onPanelSurfaceReady: (Surface) -> Unit,
     /** Поправка ухода поворота по компасу; null — компаса нет. */
     private val compass: CompassDrift? = null,
+    /** Меню растянули за уголок и отпустили (GL-поток): новый размер — запомнить. */
+    private val onMenuSizeChanged: (Float) -> Unit = {},
 ) : CardboardView.Renderer {
 
     @Volatile var format = VideoFormat()
@@ -63,7 +66,13 @@ class VrRenderer(
     enum class PanelLayout(val visibleHeightPx: Int, val width: Float, val centerY: Float) {
         Menu(PANEL_HEIGHT_PX, 2.2f, 0f),
         /** Полоска управления: верхние 360 px (240 dp при плотности панели), чуть ниже взгляда. */
-        Controls(360, 2.0f, -0.6f);
+        Controls(360, 2.0f, -0.6f),
+
+        /**
+         * Полоска с раскрытой над ней панелью (вид или очередь): 735 px = 240 + 250 dp.
+         * Нижний край — там же, где у простой полоски, панель растёт вверх, к взгляду.
+         */
+        ControlsSheet(735, 2.0f, -0.307f);
 
         val height: Float get() = width * visibleHeightPx / PANEL_WIDTH_PX
         val visibleFraction: Float get() = visibleHeightPx.toFloat() / PANEL_HEIGHT_PX
@@ -76,6 +85,16 @@ class VrRenderer(
         private set
 
     data class Gaze(val x: Float, val y: Float)
+
+    /** За что можно взяться у меню: уголки — растянуть, полоска под меню — перетащить. */
+    enum class Handle { None, TopLeft, TopRight, BottomLeft, BottomRight, Move }
+
+    /** Что из [Handle] сейчас под взглядом. Обновляется каждый кадр. */
+    @Volatile var hoverHandle = Handle.None
+        private set
+
+    /** Взялись (из UI-потока): что держат; [Handle.None] — отпустили. */
+    @Volatile var grab = Handle.None
 
     /** Заполнение кольца вокруг курсора при нажатии взглядом, 0..1. */
     @Volatile var dwellProgress = 0f
@@ -141,6 +160,15 @@ class VrRenderer(
     private var cursorProgress = 0
 
     private var uBrightness = 0
+    private var uAlpha = 0
+
+    private var shapeProgram = 0
+    private var shapePosition = 0
+    private var shapeUv = 0
+    private var shapeMvp = 0
+    private var shapeSize = 0
+    private var shapeColor = 0
+    private val shapeModel = FloatArray(16)
 
     private val recenterRequested = AtomicBoolean(true)
     private val centerOnPanelRequested = AtomicBoolean(false)
@@ -156,6 +184,30 @@ class VrRenderer(
 
     /** Во сколько раз меню дальше базовых [PANEL_DISTANCE] (и во столько же раз больше). */
     private var panelScale = 1f
+
+    /** Панель в метрах этого кадра: ширина, высота, высота центра, плоскость (z < 0). */
+    private var panelW = 0f
+    private var panelH = 0f
+    private var panelCy = 0f
+    private var panelZ = -PANEL_DISTANCE
+
+    /** Куда взгляд попадает на плоскости панели, метры от её оси; NaN — мимо плоскости. */
+    private var hitX = Float.NaN
+    private var hitY = Float.NaN
+
+    private var activeHandle = Handle.None
+    private var grabYawOffset = 0f
+    private var grabPitchOffset = 0f
+    private var grabStartDistance = 0f
+    private var grabStartSize = 1f
+
+    /** Размер меню, пока его растягивают (и пока новый не записан в настройки); иначе NaN. */
+    private var liveMenuSize = Float.NaN
+
+    /** Проявление панели 0..1: появляется плавно, а не выскакивает. */
+    private var appear = 0f
+    private var lastFrameNanos = 0L
+    private var lastLayout = PanelLayout.Menu
     private var videoYawDeg = 0f
     private var videoPitchDeg = 0f
     private var panelYawDeg = 0f
@@ -196,6 +248,14 @@ class VrRenderer(
         uTexMatrix = GLES20.glGetUniformLocation(textureProgram, "uTexMatrix")
         uUvRect = GLES20.glGetUniformLocation(textureProgram, "uUvRect")
         uBrightness = GLES20.glGetUniformLocation(textureProgram, "uBrightness")
+        uAlpha = GLES20.glGetUniformLocation(textureProgram, "uAlpha")
+
+        shapeProgram = GlUtil.program(CURSOR_VERTEX_SHADER, SHAPE_FRAGMENT_SHADER)
+        shapePosition = GLES20.glGetAttribLocation(shapeProgram, "aPosition")
+        shapeUv = GLES20.glGetAttribLocation(shapeProgram, "aUv")
+        shapeMvp = GLES20.glGetUniformLocation(shapeProgram, "uMvp")
+        shapeSize = GLES20.glGetUniformLocation(shapeProgram, "uSize")
+        shapeColor = GLES20.glGetUniformLocation(shapeProgram, "uColor")
 
         cursorProgram = GlUtil.program(CURSOR_VERTEX_SHADER, CURSOR_FRAGMENT_SHADER)
         cursorPosition = GLES20.glGetAttribLocation(cursorProgram, "aPosition")
@@ -223,13 +283,16 @@ class VrRenderer(
         direction[2] = -headView[10]
         direction[3] = 0f
         val lookYawDeg = Math.toDegrees(atan2(-direction[0], -direction[2]).toDouble()).toFloat()
-        val lookPitchDeg = if (settings.recenterPitch) {
-            Math.toDegrees(asin(direction[1].coerceIn(-1f, 1f).toDouble())).toFloat()
-        } else {
-            0f
-        }
+        val truePitchDeg = Math.toDegrees(asin(direction[1].coerceIn(-1f, 1f).toDouble())).toFloat()
+        val lookPitchDeg = if (settings.recenterPitch) truePitchDeg else 0f
 
         if (!lookYawDeg.isNaN()) {
+            val grabbed = grab
+            if (activeHandle == Handle.None && grabbed != Handle.None && !settling) {
+                startGrab(grabbed, lookYawDeg, truePitchDeg)
+            } else if (activeHandle != Handle.None && grabbed == Handle.None) {
+                endGrab()
+            }
             if (settling) {
                 settleFrames.decrementAndGet()
                 if (recenterRequested.get()) {
@@ -243,7 +306,11 @@ class VrRenderer(
             if (settling || placePanelRequested.getAndSet(false)) {
                 panelYawDeg = lookYawDeg
                 panelPitchDeg = lookPitchDeg
-            } else if (panelLayout == PanelLayout.Controls) {
+            } else if (activeHandle == Handle.Move) {
+                // Меню едет за взглядом, сохраняя, где за него взялись.
+                panelYawDeg = wrapDegrees(lookYawDeg + grabYawOffset)
+                panelPitchDeg = (truePitchDeg + grabPitchOffset).coerceIn(-MAX_MENU_PITCH, MAX_MENU_PITCH)
+            } else if (panelLayout != PanelLayout.Menu) {
                 // Полоска мягко догоняет взгляд, если отвернуться от неё далеко в сторону, и встаёт по центру.
                 val diff = wrapDegrees(lookYawDeg - panelYawDeg)
                 if (abs(diff) > CONTROLS_FOLLOW_DEG) controlsFollowing = true
@@ -261,15 +328,125 @@ class VrRenderer(
 
         updateVideoModel(format)
         val layout = panelLayout
+        updateAppear(layout)
         Matrix.setRotateM(panelRotation, 0, panelYawDeg, 0f, 1f, 0f)
         if (panelPitchDeg != 0f) Matrix.rotateM(panelRotation, 0, panelPitchDeg, 1f, 0f, 0f)
         // Меню дальше — то же по видимому размеру, но глазам меньше сводиться при переходе от видео к меню.
         val scale = settings.menuDistance.coerceIn(MIN_MENU_DISTANCE, MAX_MENU_DISTANCE) / PANEL_DISTANCE
         panelScale = scale
-        Matrix.translateM(panelModel, 0, panelRotation, 0, 0f, layout.centerY * scale, -PANEL_DISTANCE * scale)
-        Matrix.scaleM(panelModel, 0, layout.width * scale, layout.height * scale, 1f)
+        val size = if (layout == PanelLayout.Menu) menuSize() else 1f
+        panelW = layout.width * scale * size
+        panelH = layout.height * scale * size
+        panelCy = layout.centerY * scale
+        panelZ = -PANEL_DISTANCE * scale
+        // Появляясь, панель чуть «подплывает»: из 97% размера в 100%.
+        val pop = 0.97f + 0.03f * ease(appear)
+        Matrix.translateM(panelModel, 0, panelRotation, 0, 0f, panelCy, panelZ)
+        Matrix.scaleM(panelModel, 0, panelW * pop, panelH * pop, 1f)
 
-        gaze = if (panelVisible && !settling) computeGaze(layout) else null
+        updateHit()
+        if (activeHandle != Handle.None && activeHandle != Handle.Move) resizeMenu()
+        val interactive = panelVisible && !settling
+        hoverHandle = when {
+            activeHandle != Handle.None -> activeHandle
+            interactive && layout == PanelLayout.Menu -> findHandle()
+            else -> Handle.None
+        }
+        gaze = if (interactive && activeHandle == Handle.None) computeGaze(layout) else null
+        if (interactive && !hitX.isNaN()) {
+            Matrix.translateM(cursorModel, 0, panelRotation, 0, hitX, hitY, panelZ + CURSOR_LIFT * scale)
+            Matrix.scaleM(cursorModel, 0, CURSOR_SIZE * scale, CURSOR_SIZE * scale, 1f)
+        }
+    }
+
+    private fun updateAppear(layout: PanelLayout) {
+        val now = System.nanoTime()
+        val dt = if (lastFrameNanos == 0L) 0f else ((now - lastFrameNanos) / 1e9f).coerceAtMost(0.1f)
+        lastFrameNanos = now
+        // Смена раскладки (полоска ⇄ меню) — короткое проявление заново, без мигания в ноль.
+        if (layout != lastLayout) {
+            lastLayout = layout
+            appear = appear.coerceAtMost(0.4f)
+        }
+        appear = if (panelVisible && !settling) (appear + dt / APPEAR_S).coerceAtMost(1f) else 0f
+    }
+
+    private fun ease(t: Float): Float = 1f - (1f - t) * (1f - t) * (1f - t)
+
+    /** Размер меню (множитель к обычному): во время растягивания — живой, иначе из настроек. */
+    private fun menuSize(): Float {
+        val saved = settings.menuSize.coerceIn(MIN_MENU_SIZE, MAX_MENU_SIZE)
+        val live = liveMenuSize
+        if (live.isNaN()) return saved
+        // Новый размер дошёл до настроек — дальше снова по ним.
+        if (activeHandle == Handle.None && abs(saved - live) < 0.0001f) {
+            liveMenuSize = Float.NaN
+            return saved
+        }
+        return live
+    }
+
+    private fun startGrab(handle: Handle, lookYawDeg: Float, truePitchDeg: Float) {
+        activeHandle = handle
+        if (handle == Handle.Move) {
+            grabYawOffset = wrapDegrees(panelYawDeg - lookYawDeg)
+            grabPitchOffset = panelPitchDeg - truePitchDeg
+        } else {
+            grabStartSize = menuSize()
+            grabStartDistance = if (hitX.isNaN()) 0f else hypot(hitX, hitY - panelCy)
+            liveMenuSize = grabStartSize
+        }
+    }
+
+    private fun endGrab() {
+        val wasResize = activeHandle != Handle.Move
+        activeHandle = Handle.None
+        if (wasResize && !liveMenuSize.isNaN()) onMenuSizeChanged(liveMenuSize)
+    }
+
+    /** Уголок тянут от центра — меню растёт, к центру — уменьшается; пропорции те же. */
+    private fun resizeMenu() {
+        if (hitX.isNaN() || grabStartDistance <= 0f) return
+        val distance = hypot(hitX, hitY - panelCy)
+        liveMenuSize = (grabStartSize * distance / grabStartDistance).coerceIn(MIN_MENU_SIZE, MAX_MENU_SIZE)
+    }
+
+    /** Пересечение взгляда с плоскостью панели (в том числе за её краями) — в [hitX], [hitY]. */
+    private fun updateHit() {
+        // Поворот панели — чистое вращение, обратное к нему — транспонированное.
+        Matrix.transposeM(rotation, 0, panelRotation, 0)
+        Matrix.multiplyMV(localDirection, 0, rotation, 0, direction, 0)
+        val dz = localDirection[2]
+        if (dz > -0.01f) {
+            hitX = Float.NaN
+            hitY = Float.NaN
+            return
+        }
+        val t = panelZ / dz
+        hitX = localDirection[0] * t
+        hitY = localDirection[1] * t
+    }
+
+    /** Уголок или полоска под взглядом. Уголки — снаружи меню, чтобы не мешать его кнопкам. */
+    private fun findHandle(): Handle {
+        if (hitX.isNaN()) return Handle.None
+        val s = panelScale
+        val halfW = panelW / 2
+        val top = panelCy + panelH / 2
+        val bottom = panelCy - panelH / 2
+        val barY = bottom - BAR_GAP * s
+        if (abs(hitX) < panelW * BAR_WIDTH / 2 + BAR_HIT * s && abs(hitY - barY) < BAR_HIT * s) return Handle.Move
+        val inset = EDGE_INSET * s
+        val inside = abs(hitX) < halfW - inset && hitY < top - inset && hitY > bottom + inset
+        if (inside) return Handle.None
+        val reach = CORNER_HIT * s
+        return when {
+            abs(hitX + halfW) < reach && abs(hitY - top) < reach -> Handle.TopLeft
+            abs(hitX - halfW) < reach && abs(hitY - top) < reach -> Handle.TopRight
+            abs(hitX + halfW) < reach && abs(hitY - bottom) < reach -> Handle.BottomLeft
+            abs(hitX - halfW) < reach && abs(hitY - bottom) < reach -> Handle.BottomRight
+            else -> Handle.None
+        }
     }
 
     /**
@@ -288,24 +465,12 @@ class VrRenderer(
 
     private fun wrapDegrees(deg: Float): Float = ((deg + 540f) % 360f) - 180f
 
-    /** Пересечение луча взгляда с плоскостью панели, в координатах панели. */
+    /** Точка взгляда на панели в пикселях виртуального дисплея; null — мимо панели. */
     private fun computeGaze(layout: PanelLayout): Gaze? {
-        // Поворот панели — чистое вращение, обратное к нему — транспонированное.
-        Matrix.transposeM(rotation, 0, panelRotation, 0)
-        Matrix.multiplyMV(localDirection, 0, rotation, 0, direction, 0)
-        val dz = localDirection[2]
-        if (dz > -0.01f) return null
-        val s = panelScale
-        val t = -PANEL_DISTANCE * s / dz
-        val u = localDirection[0] * t / (layout.width * s) + 0.5f
-        val v = 0.5f - (localDirection[1] * t - layout.centerY * s) / (layout.height * s)
+        if (hitX.isNaN()) return null
+        val u = hitX / panelW + 0.5f
+        val v = 0.5f - (hitY - panelCy) / panelH
         if (u !in 0f..1f || v !in 0f..1f) return null
-
-        Matrix.translateM(
-            cursorModel, 0, panelRotation, 0,
-            (u - 0.5f) * layout.width * s, ((0.5f - v) * layout.height + layout.centerY) * s, (-PANEL_DISTANCE + CURSOR_LIFT) * s,
-        )
-        Matrix.scaleM(cursorModel, 0, CURSOR_SIZE * s, CURSOR_SIZE * s, 1f)
         return Gaze(u * PANEL_WIDTH_PX, v * layout.visibleHeightPx)
     }
 
@@ -332,13 +497,56 @@ class VrRenderer(
             GLES20.glUseProgram(textureProgram)
             GLES20.glUniform4f(uUvRect, 0f, 1f - visible, 1f, visible)
             GLES20.glUniform1f(uBrightness, 1f)
+            GLES20.glUniform1f(uAlpha, ease(appear))
             drawTextured(panel, quad, eye, projection, panelModel, setUvRect = false)
-            if (gaze != null) {
-                GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
-                drawCursor(eye, projection)
-            }
+            GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
+            val handle = hoverHandle
+            if (panelLayout == PanelLayout.Menu && (gaze != null || handle != Handle.None)) drawHandles(eye, projection, handle)
+            if (gaze != null || handle != Handle.None) drawCursor(eye, projection)
             GLES20.glDisable(GLES20.GL_BLEND)
         }
+    }
+
+    /**
+     * Уголки-скобки снаружи углов меню и полоска-ручка под ним. Видны, пока смотрят на меню;
+     * то, что под взглядом или в руке, — ярче.
+     */
+    private fun drawHandles(eye: CardboardView.Eye, projection: FloatArray, hovered: Handle) {
+        GLES20.glUseProgram(shapeProgram)
+        val s = panelScale
+        val fade = ease(appear)
+        val halfW = panelW / 2
+        val halfH = panelH / 2
+        val out = CORNER_OFFSET * s
+        val arm = CORNER_ARM * s
+        val thick = HANDLE_THICKNESS * s
+        val corners = listOf(
+            Handle.TopLeft to (-1f to 1f), Handle.TopRight to (1f to 1f),
+            Handle.BottomLeft to (-1f to -1f), Handle.BottomRight to (1f to -1f),
+        )
+        for ((handle, signs) in corners) {
+            val (sx, sy) = signs
+            val alpha = (if (hovered == handle) HANDLE_ACTIVE_ALPHA else HANDLE_IDLE_ALPHA) * fade
+            val px = sx * (halfW + out)
+            val py = panelCy + sy * (halfH + out)
+            // Буква «Г» в каждом углу: плечо вдоль края и плечо вниз/вверх.
+            drawShape(eye, projection, px - sx * (arm - thick) / 2, py, arm, thick, alpha)
+            drawShape(eye, projection, px, py - sy * (arm - thick) / 2, thick, arm, alpha)
+        }
+        val barAlpha = (if (hovered == Handle.Move) HANDLE_ACTIVE_ALPHA else HANDLE_IDLE_ALPHA) * fade
+        drawShape(eye, projection, 0f, panelCy - halfH - BAR_GAP * s, panelW * BAR_WIDTH, thick * 1.4f, barAlpha)
+    }
+
+    /** Скруглённая белая плашка на плоскости панели: центр и размер в метрах. */
+    private fun drawShape(eye: CardboardView.Eye, projection: FloatArray, cx: Float, cy: Float, w: Float, h: Float, alpha: Float) {
+        Matrix.translateM(shapeModel, 0, panelRotation, 0, cx, cy, panelZ + CURSOR_LIFT * panelScale / 2)
+        Matrix.scaleM(shapeModel, 0, w, h, 1f)
+        Matrix.multiplyMM(viewModel, 0, eye.eyeView, 0, shapeModel, 0)
+        Matrix.multiplyMM(mvp, 0, projection, 0, viewModel, 0)
+        GLES20.glUniformMatrix4fv(shapeMvp, 1, false, mvp, 0)
+        GLES20.glUniform2f(shapeSize, w, h)
+        GLES20.glUniform4f(shapeColor, 1f, 1f, 1f, alpha)
+        drawMesh(quad, shapePosition, shapeUv)
     }
 
     private fun drawVideo(eye: CardboardView.Eye, projection: FloatArray) {
@@ -346,6 +554,7 @@ class VrRenderer(
         val format = format
         val rect = eyeRect(format.stereo, eye.eyeType == CardboardView.Eye.RIGHT)
         GLES20.glUseProgram(textureProgram)
+        GLES20.glUniform1f(uAlpha, 1f)
         GLES20.glUniform4f(uUvRect, rect[0], rect[1], rect[2], rect[3])
         GLES20.glUniform1f(uBrightness, settings.brightness)
         drawTextured(
@@ -553,6 +762,25 @@ class VrRenderer(
         private const val CURSOR_SIZE = 0.05f
         private const val CURSOR_LIFT = 0.01f
 
+        /** Размер меню, множитель к обычному: столько можно растянуть или сжать за уголок. */
+        const val MIN_MENU_SIZE = 0.6f
+        const val MAX_MENU_SIZE = 1.8f
+        private const val MAX_MENU_PITCH = 70f
+        private const val APPEAR_S = 0.18f
+
+        // Уголки и полоска-ручка, метры при базовом расстоянии меню (дальше меню — пропорционально больше).
+        private const val CORNER_OFFSET = 0.05f
+        private const val CORNER_ARM = 0.16f
+        private const val CORNER_HIT = 0.16f
+        private const val HANDLE_THICKNESS = 0.024f
+        private const val EDGE_INSET = 0.03f
+        private const val BAR_GAP = 0.08f
+        private const val BAR_HIT = 0.07f
+        /** Ширина полоски — доля ширины меню. */
+        private const val BAR_WIDTH = 0.18f
+        private const val HANDLE_IDLE_ALPHA = 0.35f
+        private const val HANDLE_ACTIVE_ALPHA = 0.95f
+
         private const val Z_NEAR = 0.1f
         private const val Z_FAR = 100f
         private const val SPHERE_RADIUS = 10f
@@ -574,10 +802,12 @@ void main() {
 precision mediump float;
 uniform samplerExternalOES uTexture;
 uniform float uBrightness;
+uniform float uAlpha;
 varying vec2 vUv;
 void main() {
     vec4 c = texture2D(uTexture, vUv);
-    gl_FragColor = vec4(c.rgb * uBrightness, c.a);
+    // Альфа премультиплицирована: для проявления умножаем весь цвет.
+    gl_FragColor = vec4(c.rgb * uBrightness, c.a) * uAlpha;
 }
 """
 
@@ -589,6 +819,23 @@ varying vec2 vUv;
 void main() {
     vUv = aUv;
     gl_Position = uMvp * vec4(aPosition, 1.0);
+}
+"""
+
+        // Скруглённый прямоугольник (у тонкого — «пилюля») со сглаженным краем; размер в uSize — для радиуса.
+        private const val SHAPE_FRAGMENT_SHADER = """
+precision mediump float;
+uniform vec2 uSize;
+uniform vec4 uColor;
+varying vec2 vUv;
+void main() {
+    vec2 hs = uSize * 0.5;
+    vec2 p = (vUv - 0.5) * uSize;
+    float r = min(hs.x, hs.y);
+    vec2 q = abs(p) - hs + vec2(r);
+    float d = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+    float a = 1.0 - smoothstep(-r * 0.3, 0.0, d);
+    gl_FragColor = vec4(uColor.rgb, uColor.a * a);
 }
 """
 

@@ -45,6 +45,9 @@ class AppSettings private constructor(private val prefs: SharedPreferences) {
     /** Расстояние до меню в метрах; видимый размер от него не зависит. */
     var menuDistance by pref("menu_distance", 6f)
 
+    /** Размер меню — множитель к обычному; меняется и уголками меню в шлеме. */
+    var menuSize by pref("menu_size", 1f)
+
     /** Подтягивать поворот головы к компасу: центр не уплывает со временем. */
     var compassCorrection by pref("compass_correction", true)
 
