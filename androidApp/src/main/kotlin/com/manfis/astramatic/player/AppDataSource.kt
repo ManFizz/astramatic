@@ -4,6 +4,7 @@ package com.manfis.astramatic.player
 
 import android.content.Context
 import android.net.Uri
+import android.util.Log
 import androidx.annotation.OptIn
 import androidx.media3.common.C
 import androidx.media3.common.util.UnstableApi
@@ -16,6 +17,7 @@ import androidx.media3.datasource.TransferListener
 import com.hierynomus.smbj.share.File
 import com.manfis.astramatic.library.RemoteAuth
 import com.manfis.astramatic.library.SmbConnections
+import com.manfis.astramatic.library.SmbServer
 import com.manfis.astramatic.library.SmbServerStore
 import com.manfis.astramatic.library.SmbUris
 import java.io.IOException
@@ -79,6 +81,7 @@ class AppDataSource private constructor(
 class SmbDataSource(private val servers: SmbServerStore) : BaseDataSource(/* isNetwork = */ true) {
 
     private var dataSpec: DataSpec? = null
+    private var server: SmbServer? = null
     private var file: File? = null
     private var position = 0L
     private var bytesRemaining = 0L
@@ -92,16 +95,12 @@ class SmbDataSource(private val servers: SmbServerStore) : BaseDataSource(/* isN
         this.dataSpec = dataSpec
         transferInitializing(dataSpec)
         val server = servers.get(SmbUris.serverId(dataSpec.uri)) ?: throw IOException("Компьютер не найден в списке")
+        this.server = server
+        // Устаревшее подключение SmbConnections переоткроет сам.
         val file = try {
             SmbConnections.openFile(server, SmbUris.path(dataSpec.uri))
         } catch (e: Exception) {
-            // Подключение могло устареть (ПК уснул, сменилась сеть): одна попытка с новым.
-            SmbConnections.forget(server.id)
-            try {
-                SmbConnections.openFile(server, SmbUris.path(dataSpec.uri))
-            } catch (retry: Exception) {
-                throw IOException("Не удалось открыть файл по SMB", retry)
-            }
+            throw IOException("Не удалось открыть файл по SMB", e)
         }
         this.file = file
 
@@ -133,19 +132,40 @@ class SmbDataSource(private val servers: SmbServerStore) : BaseDataSource(/* isN
     }
 
     private fun fill() {
-        val file = file ?: throw IOException("Файл не открыт")
         bufferStart = position
         bufferLength = 0
         val wanted = min(buffer.size.toLong(), bytesRemaining).toInt()
-        try {
-            // Сервер может отдать меньше, чем просили, поэтому дочитываем в цикле.
-            while (bufferLength < wanted) {
-                val read = file.read(buffer, bufferStart + bufferLength, bufferLength, wanted - bufferLength)
-                if (read <= 0) break
-                bufferLength += read
+        var retries = 0
+        // Сервер может отдать меньше, чем просили, поэтому дочитываем в цикле.
+        while (bufferLength < wanted) {
+            val read = try {
+                val file = file ?: throw IOException("Файл не открыт")
+                file.read(buffer, bufferStart + bufferLength, bufferLength, wanted - bufferLength)
+            } catch (e: Exception) {
+                // Связь оборвалась посреди видео (телефон уснул на паузе, Wi-Fi моргнул):
+                // открываем файл заново и дочитываем блок с того же места.
+                if (retries >= MAX_READ_RETRIES || !with(SmbConnections) { e.isConnectionLost() }) {
+                    throw IOException("Ошибка чтения по SMB", e)
+                }
+                retries++
+                Log.w(TAG, "Чтение по SMB оборвалось, открываю файл заново ($retries): $e")
+                reopen(e)
+                continue
             }
+            if (read <= 0) break
+            bufferLength += read
+        }
+    }
+
+    private fun reopen(cause: Exception) {
+        runCatching { file?.close() }
+        file = null
+        val server = server ?: throw IOException("Файл не открыт", cause)
+        val uri = dataSpec?.uri ?: throw IOException("Файл не открыт", cause)
+        file = try {
+            SmbConnections.openFile(server, SmbUris.path(uri))
         } catch (e: Exception) {
-            throw IOException("Ошибка чтения по SMB", e)
+            throw IOException("Не удалось заново открыть файл по SMB", e.apply { addSuppressed(cause) })
         }
     }
 
@@ -153,6 +173,7 @@ class SmbDataSource(private val servers: SmbServerStore) : BaseDataSource(/* isN
 
     override fun close() {
         dataSpec = null
+        server = null
         bufferLength = 0
         try {
             file?.close()
@@ -164,5 +185,10 @@ class SmbDataSource(private val servers: SmbServerStore) : BaseDataSource(/* isN
                 transferEnded()
             }
         }
+    }
+
+    private companion object {
+        const val TAG = "SmbDataSource"
+        const val MAX_READ_RETRIES = 2
     }
 }

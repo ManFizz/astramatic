@@ -15,8 +15,14 @@ fun Throwable.describe(): String {
         "STATUS_BAD_NETWORK_NAME" in text -> "Общая папка с таким именем не найдена."
         "STATUS_OBJECT_NAME_NOT_FOUND" in text || "STATUS_OBJECT_PATH_NOT_FOUND" in text -> "Файл или папка не найдены."
         chain.any { it is java.net.UnknownHostException } -> "Компьютер с таким именем не найден. Попробуйте IP-адрес."
-        chain.any { it is java.net.ConnectException || it is java.net.SocketTimeoutException } ->
+        chain.any {
+            it is java.net.ConnectException || it is java.net.SocketTimeoutException ||
+                it is java.util.concurrent.TimeoutException
+        } ->
             "Компьютер не отвечает. Проверьте, что он включён, в той же сети и доступ разрешён в брандмауэре."
+        "Broken pipe" in text || "Connection reset" in text || "ECONNRESET" in text || "EPIPE" in text ||
+            chain.any { it is java.io.EOFException || it is com.hierynomus.protocol.transport.TransportException } ->
+            "Связь с компьютером оборвалась. Попробуйте ещё раз — приложение подключится заново."
         else -> chain.last().message ?: chain.last()::class.simpleName ?: "Неизвестная ошибка"
     }
 }
