@@ -53,7 +53,7 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
         ) { settings.resumePlayback = it }
         SwitchRow(
             title = "История просмотра",
-            hint = "Недавние файлы — на главном экране и во вкладке «Файлы».",
+            hint = "Недавние файлы — на главной, и в телефоне, и в шлеме.",
             checked = settings.keepHistory,
         ) { settings.keepHistory = it }
         SwitchRow(
