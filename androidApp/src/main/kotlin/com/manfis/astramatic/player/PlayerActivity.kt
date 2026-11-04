@@ -59,7 +59,6 @@ import com.manfis.astramatic.settings.AxisBinding
 import com.manfis.astramatic.settings.AxisContext
 import com.manfis.astramatic.settings.KeyBindings
 import android.media.AudioManager
-import kotlin.math.hypot
 import com.manfis.astramatic.library.DarkframeClient
 import com.manfis.astramatic.library.DarkframeStore
 import java.util.concurrent.Executors
@@ -591,7 +590,7 @@ class PlayerActivity : ComponentActivity() {
     private fun showPanel(mode: VrMenuState.Mode) {
         menu.mode = mode
         if (mode == VrMenuState.Mode.Menu) menu.sheet = null
-        lastLookAtControls = SystemClock.uptimeMillis()
+        autoHide.touch(SystemClock.uptimeMillis())
         if (stereoMode) {
             updatePanelLayout()
             renderer.placePanelInFront()
@@ -661,56 +660,29 @@ class PlayerActivity : ComponentActivity() {
         }
     }
 
-    /** Когда последний раз смотрели на полоску плеера (или трогали её). */
-    private var lastLookAtControls = 0L
+    private val autoHide = ControlsAutoHide()
 
     /**
      * Полоска сама уходит, если идёт видео, а смотрят не на неё: панель не раскрыта, ничего не держат.
      * true — спрятали.
      */
     private fun autoHideControls(gaze: Gaze?): Boolean {
-        val now = SystemClock.uptimeMillis()
-        val watching = menu.mode == VrMenuState.Mode.Controls && menu.sheet == null && !pressedOnPanel &&
+        val unattended = menu.mode == VrMenuState.Mode.Controls && menu.sheet == null && !pressedOnPanel &&
             !grabbing && gaze == null && player.isPlaying && playlist?.current?.isImage != true
-        if (!watching) {
-            lastLookAtControls = now
-            return false
-        }
-        if (now - lastLookAtControls < CONTROLS_AUTO_HIDE_MS) return false
+        if (!autoHide.shouldHide(SystemClock.uptimeMillis(), unattended)) return false
         hideMenu()
         return true
     }
 
-    // Нажатие взглядом: точка простояла на месте dwellMs — нажимаем. Следующее — только после сдвига взгляда.
-    private var dwellAnchor: Gaze? = null
-    private var dwellStart = 0L
-    private var dwellFired = false
+    private val dwell = DwellClick()
 
     private fun updateDwell(gaze: Gaze?) {
-        if (!settings.dwellClick || gaze == null || pressedOnPanel) {
-            dwellAnchor = null
-            renderer.dwellProgress = 0f
-            return
-        }
-        val now = SystemClock.uptimeMillis()
-        val anchor = dwellAnchor
-        if (anchor == null || hypot(gaze.x - anchor.x, gaze.y - anchor.y) > DWELL_RADIUS_PX) {
-            dwellAnchor = gaze
-            dwellStart = now
-            dwellFired = false
-        }
-        if (dwellFired) {
-            renderer.dwellProgress = 0f
-            return
-        }
-        val progress = (now - dwellStart).toFloat() / settings.dwellMs
-        renderer.dwellProgress = progress.coerceAtMost(1f)
-        if (progress >= 1f) {
-            dwellFired = true
-            renderer.dwellProgress = 0f
-            val point = dwellAnchor ?: gaze
-            uiHost.touch(MotionEvent.ACTION_DOWN, point.x, point.y)
-            uiHost.touch(MotionEvent.ACTION_UP, point.x, point.y)
+        val enabled = settings.dwellClick && !pressedOnPanel
+        val state = dwell.update(gaze, enabled, settings.dwellMs, SystemClock.uptimeMillis())
+        renderer.dwellProgress = state.progress
+        state.click?.let {
+            uiHost.touch(MotionEvent.ACTION_DOWN, it.x, it.y)
+            uiHost.touch(MotionEvent.ACTION_UP, it.x, it.y)
         }
     }
 
@@ -1120,7 +1092,6 @@ class PlayerActivity : ComponentActivity() {
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
     companion object {
-        private const val CONTROLS_AUTO_HIDE_MS = 4000L
         /** Своя панорама окружения: копия, уменьшенная до [EnvironmentLayer.CUSTOM_MAX_WIDTH]. */
         fun environmentFile(context: Context) = java.io.File(context.filesDir, "environment.jpg")
 
@@ -1154,6 +1125,5 @@ class PlayerActivity : ComponentActivity() {
             RemoteAction.ScrollUp, RemoteAction.ScrollDown,
         )
         private const val SAVE_INTERVAL_MS = 5_000L
-        private const val DWELL_RADIUS_PX = 18f
     }
 }
