@@ -1,0 +1,2 @@
+# Bash-скрипты с CRLF не запускаются.
+*.sh text eol=lf
