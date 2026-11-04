@@ -454,12 +454,7 @@ class VrRenderer(
      * Дальше всё (взгляд, глаза) считается уже по исправленному виду.
      */
     private fun correctDrift() {
-        val compass = compass ?: return
-        if (!settings.compassCorrection) {
-            compass.reset()
-            return
-        }
-        val drift = compass.update(headView)
+        val drift = compass?.correction(headView, settings.compassCorrection) ?: return
         if (drift != 0f) Matrix.rotateM(headView, 0, drift, 0f, 1f, 0f)
     }
 

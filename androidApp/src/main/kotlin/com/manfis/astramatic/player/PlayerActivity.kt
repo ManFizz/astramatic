@@ -97,7 +97,7 @@ class PlayerActivity : ComponentActivity() {
     private val formats by lazy { FormatMemory(this) }
     private val history by lazy { History.get(this) }
     private val darkframes by lazy { DarkframeStore(this) }
-    private val compass by lazy { CompassDrift(this) }
+    private val compass by lazy { CompassDrift(SensorRotationSource.of(this), SystemClock::uptimeMillis) }
 
     /** Сеть (позиции в Darkframe, списки с ПК) — не на главном потоке, по одному запросу за раз. */
     private val io = Executors.newSingleThreadExecutor()

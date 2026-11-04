@@ -1,11 +1,5 @@
 package com.manfis.astramatic.player
 
-import android.content.Context
-import android.hardware.Sensor
-import android.hardware.SensorEvent
-import android.hardware.SensorEventListener
-import android.hardware.SensorManager
-import android.os.SystemClock
 import kotlin.math.abs
 import kotlin.math.atan2
 
@@ -21,12 +15,12 @@ import kotlin.math.atan2
  * взгляд (задняя сторона телефона); когда он почти вертикален (лёжа, взгляд в потолок, телефон на столе),
  * его направление по сторонам света не определено — тогда берётся длинная сторона телефона, она горизонтальна.
  */
-class CompassDrift(context: Context) : SensorEventListener {
-
-    private val sensors = context.getSystemService(SensorManager::class.java)
-    private val sensor: Sensor? = sensors?.getDefaultSensor(Sensor.TYPE_ROTATION_VECTOR)
-
-    private val matrix = FloatArray(9)
+class CompassDrift(
+    /** Датчик поворота; null — на телефоне его нет. */
+    private val source: RotationSource?,
+    /** Текущее время, мс. */
+    private val clock: () -> Long,
+) {
 
     /** Направление по компасу (рост — поворот влево, как у трекинга) взгляда и длинной стороны, градусы. */
     @Volatile private var compassLookDeg = Float.NaN
@@ -47,14 +41,14 @@ class CompassDrift(context: Context) : SensorEventListener {
 
     private var lastUpdate = 0L
 
-    val available get() = sensor != null
+    val available get() = source != null
 
     fun start() {
-        sensor?.let { sensors?.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME) }
+        source?.start(::onRotation)
     }
 
     fun stop() {
-        sensors?.unregisterListener(this)
+        source?.stop()
         compassLookDeg = Float.NaN
         compassSideDeg = Float.NaN
     }
@@ -65,8 +59,8 @@ class CompassDrift(context: Context) : SensorEventListener {
         driftDeg = 0f
     }
 
-    override fun onSensorChanged(event: SensorEvent) {
-        SensorManager.getRotationMatrixFromVector(matrix, event.values)
+    /** Новое показание датчика: матрица поворота 3×3 по строкам, телефон → мир компаса. */
+    private fun onRotation(matrix: FloatArray) {
         // Мир компаса: X — восток, Y — север, Z — вверх. Взгляд — −Z телефона,
         // длинная сторона — −Y телефона (в горизонтальном положении шлема она смотрит вправо).
         compassLookUp = abs(matrix[8])
@@ -74,14 +68,22 @@ class CompassDrift(context: Context) : SensorEventListener {
         compassSideDeg = heading(-matrix[1], -matrix[4])
     }
 
-    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int) = Unit
+    /**
+     * На сколько повернуть мир обратно в этом кадре. Поправку выключили — оценка сбрасывается,
+     * чтобы при включении начать заново.
+     */
+    fun correction(headView: FloatArray, enabled: Boolean): Float {
+        if (enabled) return update(headView)
+        reset()
+        return 0f
+    }
 
     /**
      * Обновить оценку ухода по виду головы от трекинга [headView] (мир → голова, по столбцам).
      * Возвращает, на сколько повернуть мир обратно.
      */
     fun update(headView: FloatArray): Float {
-        val now = SystemClock.uptimeMillis()
+        val now = clock()
         val dt = if (lastUpdate == 0L) 0f else ((now - lastUpdate) / 1000f).coerceAtMost(0.1f)
         lastUpdate = now
 
@@ -127,4 +129,11 @@ class CompassDrift(context: Context) : SensorEventListener {
         const val SWITCH_TO_SIDE = 0.8f
         const val SWITCH_BACK = 0.6f
     }
+}
+
+/** Откуда [CompassDrift] берёт положение телефона в мире компаса. */
+interface RotationSource {
+    /** [listener] получает матрицу поворота 3×3 по строкам: телефон → мир (X — восток, Y — север, Z — вверх). */
+    fun start(listener: (FloatArray) -> Unit)
+    fun stop()
 }
