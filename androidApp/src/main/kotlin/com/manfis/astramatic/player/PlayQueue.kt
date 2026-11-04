@@ -26,11 +26,20 @@ sealed interface AtEnd {
 object PlayQueue {
 
     /**
-     * Соседний файл с учётом режимов: случайный — любой другой, «повтор папки» — по кругу.
+     * Соседний файл с учётом режимов: «повтор папки» — по кругу, случайный порядок вперёд — любой другой,
+     * назад — [lastWatched], файл, который смотрели перед этим.
      * null — дальше некуда.
      */
-    fun neighbor(index: Int, size: Int, delta: Int, modes: QueueModes, random: Random = Random): Int? {
+    fun neighbor(
+        index: Int,
+        size: Int,
+        delta: Int,
+        modes: QueueModes,
+        random: Random = Random,
+        lastWatched: Int? = null,
+    ): Int? {
         if (modes.shuffle && size > 1) {
+            if (delta < 0) return lastWatched
             val other = random.nextInt(size - 1)
             return if (other >= index) other + 1 else other
         }
@@ -40,11 +49,11 @@ object PlayQueue {
         return if (delta > 0) 0 else size - 1
     }
 
-    /** Видео закончилось: повтор файла важнее всего, случайный порядок и повтор папки идут дальше сами. */
+    /** Видео закончилось: повтор файла важнее всего, повтор папки идёт дальше и без автоперехода. */
     fun atEnd(index: Int, size: Int, modes: QueueModes, random: Random = Random): AtEnd {
         if (modes.repeat == RepeatMode.One) return AtEnd.RestartFile
         val next = neighbor(index, size, 1, modes, random)
-        val auto = modes.autoplayNext || modes.repeat == RepeatMode.All || modes.shuffle
+        val auto = modes.autoplayNext || modes.repeat == RepeatMode.All
         return if (auto && next != null) AtEnd.OpenFile(next) else AtEnd.ShowControls
     }
 

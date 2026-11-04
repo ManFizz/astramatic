@@ -51,19 +51,30 @@ class PlayQueueTest {
     }
 
     @Test
-    fun `shuffle picks any other file in both directions`() {
+    fun `shuffle next picks any other file`() {
         val modes = plain.copy(shuffle = true)
         val seen = HashSet<Int>()
         repeat(500) {
             val next = PlayQueue.neighbor(2, 5, 1, modes, random)!!
-            val previous = PlayQueue.neighbor(2, 5, -1, modes, random)!!
             assertNotEquals(2, next)
-            assertNotEquals(2, previous)
-            assertTrue(next in 0 until 5 && previous in 0 until 5)
+            assertTrue(next in 0 until 5)
             seen += next
         }
 
         assertEquals(setOf(0, 1, 3, 4), seen)
+    }
+
+    @Test
+    fun `shuffle previous is the file watched before`() {
+        val modes = plain.copy(shuffle = true)
+
+        assertEquals(4, PlayQueue.neighbor(2, 5, -1, modes, random, lastWatched = 4))
+        assertNull(PlayQueue.neighbor(2, 5, -1, modes, random))
+    }
+
+    @Test
+    fun `without shuffle previous ignores the watched file`() {
+        assertEquals(1, PlayQueue.neighbor(2, 5, -1, plain, random, lastWatched = 4))
     }
 
     @Test
@@ -94,10 +105,23 @@ class PlayQueueTest {
         assertEquals(AtEnd.OpenFile(0), PlayQueue.atEnd(4, 5, modes))
     }
 
-    /** PL-06, текущее поведение; вопрос пользователю ещё не закрыт. */
     @Test
-    fun `shuffle continues even with autoplay off`() {
+    fun `shuffle stops with autoplay off`() {
         val end = PlayQueue.atEnd(2, 5, plain.copy(autoplayNext = false, shuffle = true), random)
+
+        assertEquals(AtEnd.ShowControls, end)
+    }
+
+    @Test
+    fun `shuffle goes on with autoplay`() {
+        val end = PlayQueue.atEnd(2, 5, plain.copy(shuffle = true), random)
+
+        assertTrue(end is AtEnd.OpenFile && end.index != 2)
+    }
+
+    @Test
+    fun `shuffle with folder repeat goes on with autoplay off`() {
+        val end = PlayQueue.atEnd(2, 5, plain.copy(autoplayNext = false, shuffle = true, repeat = RepeatMode.All), random)
 
         assertTrue(end is AtEnd.OpenFile && end.index != 2)
     }

@@ -71,6 +71,9 @@ class PlayerSession(
     private var playlist: Playlist? = null
     private var slideshowPaused = false
 
+    /** Что смотрели в этой папке, по порядку: по этому списку идёт ⏮ в случайном порядке. */
+    private val watched = ArrayDeque<Int>()
+
     private val currentIsImage get() = playlist?.current?.isImage == true
 
     private val repeatMode get() = RepeatMode.entries.find { it.name == settings.repeatMode } ?: RepeatMode.Off
@@ -171,6 +174,19 @@ class PlayerSession(
      * [fromMenu] — выбрано в меню: тогда видео встаёт там, где меню.
      */
     fun open(next: Playlist, fromMenu: Boolean = false) {
+        rememberWatched(next)
+        show(next, fromMenu)
+    }
+
+    private fun rememberWatched(next: Playlist) {
+        val list = playlist ?: return
+        when {
+            list.items != next.items -> watched.clear()
+            list.index != next.index -> watched.addLast(list.index)
+        }
+    }
+
+    private fun show(next: Playlist, fromMenu: Boolean = false) {
         savePosition()
         val wasImage = currentIsImage
         playlist = next
@@ -232,12 +248,20 @@ class PlayerSession(
     }
 
     private fun step(delta: Int) {
-        neighbor(delta)?.let { open(it) }
+        val target = neighbor(delta) ?: return
+        if (delta < 0 && settings.shuffle) {
+            // Возврат по истории: файл, с которого ушли, в неё не записывается.
+            watched.removeLast()
+            show(target)
+        } else {
+            open(target)
+        }
     }
 
     private fun neighbor(delta: Int): Playlist? {
         val list = playlist ?: return null
-        return PlayQueue.neighbor(list.index, list.items.size, delta, queueModes, random)?.let { list.copy(index = it) }
+        return PlayQueue.neighbor(list.index, list.items.size, delta, queueModes, random, watched.lastOrNull())
+            ?.let { list.copy(index = it) }
     }
 
     private fun updateNavigation() {

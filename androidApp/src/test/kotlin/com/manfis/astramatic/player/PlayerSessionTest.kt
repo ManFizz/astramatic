@@ -275,10 +275,23 @@ class PlayerSessionTest {
         assertEquals(PanelPlace.Vr, host.place)
     }
 
-    /** Текущее поведение; вопрос пользователю ещё не закрыт. */
     @Test
-    fun `PL-06 shuffle ignores autoplay being off`() {
+    fun `PL-06 shuffle respects autoplay being off`() {
         settings.autoplayNext = false
+        settings.shuffle = true
+        session.open(folder())
+
+        session.onVideoEnded()
+
+        assertEquals("v0", menu.title)
+        assertEquals(1, media.opened.size)
+        assertEquals(VrMenuState.Mode.Controls, menu.mode)
+        assertEquals(PanelPlace.Vr, host.place)
+    }
+
+    @Test
+    fun `PL-06 shuffle goes on with autoplay`() {
+        settings.autoplayNext = true
         settings.shuffle = true
         session.open(folder())
 
@@ -360,29 +373,108 @@ class PlayerSessionTest {
         assertFalse(menu.hasNext)
     }
 
-    /** Текущее поведение; вопрос пользователю ещё не закрыт. */
     @Test
-    fun `PL-08 shuffle previous picks a random file, not the last one watched`() {
+    fun `PL-08 shuffle previous goes back through the files watched`() {
         settings.shuffle = true
         session.open(folder(0, size = 50))
         session.nextFile()
         val second = menu.title
+        session.nextFile()
+        assertTrue(menu.hasPrevious)
 
         session.previousFile()
+        assertEquals(second, menu.title)
+        assertTrue(menu.hasPrevious)
 
-        assertTrue(menu.title != second)
-        assertTrue(menu.title != "v0", "случайное совпадение при этом зерне означало бы историю")
+        session.previousFile()
+        assertEquals("v0", menu.title)
+        assertFalse(menu.hasPrevious)
     }
 
     @Test
-    fun `shuffle button makes both directions available`() {
+    fun `PL-08 nothing to go back to on the first file watched`() {
+        settings.shuffle = true
+        session.open(folder(1))
+
+        assertFalse(menu.hasPrevious)
+        session.previousFile()
+
+        assertEquals("v1", menu.title)
+        assertEquals(1, media.opened.size)
+    }
+
+    @Test
+    fun `PL-08 next after going back picks a new file and history goes on`() {
+        settings.shuffle = true
+        session.open(folder(0, size = 50))
+        session.nextFile()
+        session.previousFile()
+
+        session.nextFile()
+        assertTrue(menu.title != "v0")
+
+        session.previousFile()
+        assertEquals("v0", menu.title)
+    }
+
+    @Test
+    fun `PL-08 history includes the queue and the end of a video`() {
+        settings.shuffle = true
+        settings.autoplayNext = true
+        session.open(folder(0, size = 50))
+        session.playQueueItem(7)
+        session.onVideoEnded()
+
+        session.previousFile()
+        assertEquals("v7", menu.title)
+
+        session.previousFile()
+        assertEquals("v0", menu.title)
+    }
+
+    @Test
+    fun `PL-08 turning shuffle on goes back to the file really watched`() {
+        session.open(folder(4, size = 10))
+        session.playQueueItem(8)
+
+        session.toggleShuffle()
+        session.previousFile()
+
+        assertEquals("v4", menu.title)
+    }
+
+    @Test
+    fun `PL-08 another folder starts a new history`() {
+        settings.shuffle = true
+        session.open(folder(0, size = 50))
+        session.nextFile()
+
+        session.open(photos(0))
+
+        assertFalse(menu.hasPrevious)
+    }
+
+    @Test
+    fun `PL-08 the same file opened again is not history`() {
+        settings.shuffle = true
         session.open(folder(0))
+
+        session.open(folder(0))
+
+        assertFalse(menu.hasPrevious)
+    }
+
+    @Test
+    fun `shuffle button makes next available, previous waits for history`() {
+        session.open(folder(2))
+        assertFalse(menu.hasNext)
+        assertTrue(menu.hasPrevious)
 
         session.toggleShuffle()
 
         assertTrue(settings.shuffle)
-        assertTrue(menu.hasPrevious)
         assertTrue(menu.hasNext)
+        assertFalse(menu.hasPrevious)
     }
 
     @Test
