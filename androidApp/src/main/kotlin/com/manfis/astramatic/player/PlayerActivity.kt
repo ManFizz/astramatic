@@ -2,10 +2,10 @@ package com.manfis.astramatic.player
 
 import android.annotation.SuppressLint
 import android.content.Context
-import android.content.Intent
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
-import android.net.Uri
+import android.media.AudioManager
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -20,102 +20,66 @@ import android.widget.FrameLayout
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.addCallback
-import androidx.annotation.OptIn
+import androidx.compose.runtime.snapshotFlow
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
-import androidx.media3.common.MediaItem
-import androidx.media3.common.PlaybackException
-import androidx.media3.common.Player
-import androidx.media3.common.VideoSize
-import androidx.media3.common.util.UnstableApi
-import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
-import com.google.cardboard.sdk.CardboardView
-import com.manfis.astramatic.model.Projection
-import com.manfis.astramatic.model.StereoLayout
-import com.manfis.astramatic.model.VideoFormat
-import com.manfis.astramatic.ui.VrMenu
-import com.manfis.astramatic.ui.VrMenuActions
-import com.manfis.astramatic.ui.VrMenuState
-import com.manfis.astramatic.ui.MAX_ZOOM
-import com.manfis.astramatic.ui.MIN_ZOOM
-import android.graphics.Bitmap
-import android.view.Surface
 import androidx.lifecycle.lifecycleScope
-import androidx.compose.runtime.snapshotFlow
-import coil3.SingletonImageLoader
-import coil3.request.ImageRequest
-import coil3.request.SuccessResult
-import coil3.request.ErrorResult
-import com.manfis.astramatic.ui.describe
-import coil3.request.allowHardware
-import coil3.toBitmap
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.launch
+import com.google.cardboard.sdk.CardboardView
+import com.manfis.astramatic.remote.PlayerStatus
 import com.manfis.astramatic.settings.AppSettings
 import com.manfis.astramatic.settings.KeyBindings
-import android.media.AudioManager
-import com.manfis.astramatic.library.DarkframeClient
-import com.manfis.astramatic.library.DarkframeStore
+import com.manfis.astramatic.ui.VrMenu
+import com.manfis.astramatic.ui.VrMenuState
 import java.util.concurrent.Executors
-import android.os.Build
-import com.manfis.astramatic.library.DesktopClient
-import com.manfis.astramatic.library.DesktopServer
-import com.manfis.astramatic.library.MediaLibrary
-import com.manfis.astramatic.library.SmbThumbnailFetcher
-import com.manfis.astramatic.library.MediaSourceRef
-import com.manfis.astramatic.model.VideoFormatDetector
-import com.manfis.astramatic.remote.PlayerStatus
-import com.manfis.astramatic.remote.VideoFiles
-import com.manfis.astramatic.remote.RemoteCommand
-import com.manfis.astramatic.ui.DefaultFormat
-import com.manfis.astramatic.settings.RepeatMode
+import kotlinx.coroutines.launch
 
 /**
- * VR-оболочка: видео, меню (плеер, файлы, шлем) и переключение VR ⇄ 2D.
- * Можно открыть сразу с видео (intent.data) или без него — тогда начинается с файлов.
+ * Связка плеера с Android: окно, Cardboard, события ввода и жизненный цикл.
+ * Вся логика — в [PanelController], [PlayerSession] и [RemoteInput].
+ * Можно открыть сразу с видео ([PendingPlaylist]) или без него — тогда начинается с файлов.
  */
 class PlayerActivity : ComponentActivity() {
 
-    private lateinit var player: ExoPlayer
+    private lateinit var media: PlayerMedia
     private lateinit var renderer: VrRenderer
     private lateinit var cardboardView: CardboardView
     private lateinit var uiHost: VrUiHost
     private lateinit var modeButton: TextView
     private lateinit var panels: PanelController
+    private lateinit var session: PlayerSession
     private lateinit var input: RemoteInput
 
     private val menu = VrMenuState()
     private val handler = Handler(Looper.getMainLooper())
+    private val ticks = HandlerTicks(handler)
     private val settings by lazy { AppSettings.get(this) }
-    private val positions by lazy { ResumePositions(this) }
-    private val formats by lazy { FormatMemory(this) }
-    private val history by lazy { History.get(this) }
-    private val darkframes by lazy { DarkframeStore(this) }
     private val compass by lazy { CompassDrift(SensorRotationSource.of(this), SystemClock::uptimeMillis) }
 
     /** Сеть (позиции в Darkframe, списки с ПК) — не на главном потоке, по одному запросу за раз. */
     private val io = Executors.newSingleThreadExecutor()
 
     private val remote by lazy {
+        val commands = DesktopCommands(
+            session,
+            DesktopPlaylists(this, io, handler, onOpen = { session.open(it) }, onNotice = { panels.showNotice(it) }),
+        )
         RemoteLink(
             context = this,
             status = {
                 PlayerStatus(
                     device = Build.MODEL,
                     title = menu.title,
-                    positionMs = player.currentPosition,
-                    durationMs = player.duration.coerceAtLeast(0),
-                    playing = menuActions.isPlaying(),
+                    positionMs = session.positionMs(),
+                    durationMs = session.durationMs(),
+                    playing = session.isPlaying(),
                     stereo = stereoMode,
                     format = menu.title?.let { menu.format.encode() },
                 )
             },
-            onCommand = ::onRemoteCommand,
+            onCommand = commands::handle,
         )
     }
-    private var playlist: Playlist? = null
 
     private val prefs by lazy { getSharedPreferences("player", MODE_PRIVATE) }
 
@@ -124,7 +88,6 @@ class PlayerActivity : ComponentActivity() {
         get() = prefs.getBoolean(KEY_STEREO, true)
         set(value) = prefs.edit().putBoolean(KEY_STEREO, value).apply()
 
-    @OptIn(UnstableApi::class)
     @SuppressLint("ClickableViewAccessibility")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -135,43 +98,18 @@ class PlayerActivity : ComponentActivity() {
             systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
         }
 
-        player = ExoPlayer.Builder(this)
-            // Умеет и обычные файлы, и smb:// с компьютера.
-            .setMediaSourceFactory(DefaultMediaSourceFactory(AppDataSource.Factory(this)))
-            .build()
-        player.addListener(object : Player.Listener {
-            override fun onVideoSizeChanged(videoSize: VideoSize) {
-                if (videoSize.height > 0) {
-                    renderer.videoAspect = videoSize.width * videoSize.pixelWidthHeightRatio / videoSize.height
-                }
-            }
-
-            override fun onPlaybackStateChanged(playbackState: Int) {
-                if (playbackState != Player.STATE_ENDED || playlist?.current?.isImage == true) return
-                savePosition()
-                val list = playlist
-                when (val end = PlayQueue.atEnd(list?.index ?: 0, list?.items?.size ?: 0, queueModes)) {
-                    AtEnd.RestartFile -> {
-                        player.seekTo(0)
-                        player.play()
-                    }
-                    is AtEnd.OpenFile -> openPlaylist(list!!.copy(index = end.index))
-                    AtEnd.ShowControls -> panels.showControls()
-                }
-            }
-
-            override fun onPlayerError(error: PlaybackException) {
-                panels.showNotice(error.describe(), VrMenuState.Tab.Home)
-            }
-        })
-
         renderer = VrRenderer(
             settings = settings,
             environmentFile = environmentFile(this),
-            onVideoSurfaceReady = { surface -> runOnUiThread { onVideoSurface(surface) } },
+            onVideoSurfaceReady = { surface -> runOnUiThread { media.onVideoSurface(surface) } },
             onPanelSurfaceReady = { surface -> runOnUiThread { uiHost.setSurface(surface) } },
             compass = compass.takeIf { it.available },
             onMenuSizeChanged = { size -> runOnUiThread { settings.menuSize = size } },
+        )
+        media = PlayerMedia(
+            this, renderer, settings,
+            onEnded = { session.onVideoEnded() },
+            onError = { session.onPlaybackError(it) },
         )
 
         // Как в примере paperscope: GL-вид SDK умеет выполнить код завершения на GL-потоке при отсоединении.
@@ -220,19 +158,29 @@ class PlayerActivity : ComponentActivity() {
         })
 
         menu.stereo = stereoMode
-        uiHost = VrUiHost(this, screenOverlay) { VrMenu(menu, menuActions) }
+        uiHost = VrUiHost(this, screenOverlay) { VrMenu(menu, session) }
         panels = PanelController(
-            menu, settings, uiHost, renderer,
-            ticks = HandlerTicks(handler),
+            menu, settings, uiHost, renderer, ticks,
             clock = SystemClock::uptimeMillis,
             stereo = { stereoMode },
-            videoPlaying = { player.isPlaying && playlist?.current?.isImage != true },
+            videoPlaying = { session.videoPlaying },
             exit = ::finish,
             onShownChanged = ::updateModeButton,
         )
+        session = PlayerSession(
+            menu, settings, media,
+            memory = PlaybackStore(this, settings, io, handler),
+            scene = renderer,
+            panels = panels,
+            ticks = ticks,
+            switchStereo = ::toggleStereoMode,
+            // Только на потоке отрисовки: SDK пользуется параметрами шлема там же, и перечитывание
+            // с главного потока роняло приложение посреди кадра.
+            applyHeadset = { cardboardView.queueEvent { cardboardView.loadDeviceParams() } },
+            closePlayer = ::finish,
+        )
         input = RemoteInput(
-            menu, settings.keys, uiHost, panels, menuActions,
-            ticks = HandlerTicks(handler),
+            menu, settings.keys, uiHost, panels, session, ticks,
             clock = SystemClock::uptimeMillis,
             systemBack = { onBackPressedDispatcher.onBackPressed() },
             volume = ::changeVolume,
@@ -254,329 +202,8 @@ class PlayerActivity : ComponentActivity() {
         onBackPressedDispatcher.addCallback(this) { panels.goBack() }
 
         val pending = PendingPlaylist.take()
-        if (pending != null) openPlaylist(pending) else panels.showMenu(VrMenuState.Tab.Home)
+        if (pending != null) session.open(pending) else panels.showMenu(VrMenuState.Tab.Home)
     }
-
-    private val menuActions = object : VrMenuActions {
-        // У фото «играет» — значит идёт слайд-шоу.
-        override fun isPlaying() = if (playlist?.current?.isImage == true) slideshowRunning() else player.isPlaying
-        override fun positionMs() = player.currentPosition
-        override fun durationMs() = player.duration.coerceAtLeast(0)
-        override fun togglePlayback() = this@PlayerActivity.togglePlayback()
-        override fun seekTo(positionMs: Long) = player.seekTo(positionMs)
-
-        override fun seekBy(deltaMs: Long) {
-            val end = player.duration.takeIf { it > 0 } ?: Long.MAX_VALUE
-            player.seekTo((player.currentPosition + deltaMs).coerceIn(0, end))
-        }
-
-        override fun setFormat(format: VideoFormat) {
-            applyFormat(format)
-            // Выбран вручную — запоминаем для этого файла.
-            playlist?.current?.let { formats.save(it.uri, format) }
-        }
-
-        override fun resetFormat() {
-            val item = playlist?.current ?: return
-            formats.clear(item.uri)
-            applyFormat(item.format)
-        }
-
-        override fun toggleStereo() = toggleStereoMode()
-        override fun recenter() = renderer.recenter()
-
-        override fun setZoom(zoom: Float) {
-            val value = zoom.coerceIn(MIN_ZOOM, MAX_ZOOM)
-            menu.zoom = value
-            renderer.zoom = value
-        }
-
-        override fun setSpeed(speed: Float) {
-            menu.speed = speed
-            player.setPlaybackSpeed(speed)
-        }
-
-        override fun setAsEnvironment(): String = saveEnvironment()
-        // Выбрано в меню — видео встаёт там, где меню.
-        override fun play(playlist: Playlist) = openPlaylist(playlist, fromMenu = true)
-        override fun previousFile() { playlist?.let { step(it, -1) }?.let(::openPlaylist) }
-        override fun nextFile() { playlist?.let { step(it, 1) }?.let(::openPlaylist) }
-
-        override fun cycleRepeat() {
-            settings.repeatMode = PlayQueue.nextRepeat(repeatMode).name
-            updateNavigation()
-        }
-
-        override fun toggleShuffle() {
-            settings.shuffle = !settings.shuffle
-            updateNavigation()
-        }
-
-        override fun playQueueItem(index: Int) {
-            val list = playlist ?: return
-            PlayQueue.queueTarget(index, list.items.size, list.index)?.let { openPlaylist(list.copy(index = it)) }
-        }
-
-        override fun toggleSlideshow() {
-            settings.slideshow = !settings.slideshow
-            slideshowPaused = false
-            scheduleSlideshow()
-        }
-        // Только на потоке отрисовки: SDK пользуется параметрами шлема там же, и перечитывание
-        // с главного потока роняло приложение посреди кадра.
-        override fun headsetSaved() = cardboardView.queueEvent { cardboardView.loadDeviceParams() }
-        override fun openMenu(tab: VrMenuState.Tab) = panels.showMenu(tab)
-        override fun hide() = panels.hide()
-        override fun exit() = finish()
-    }
-
-    private val repeatMode get() = RepeatMode.entries.find { it.name == settings.repeatMode } ?: RepeatMode.Off
-
-    private val queueModes get() = QueueModes(settings.shuffle, repeatMode, settings.autoplayNext)
-
-    private fun step(list: Playlist, delta: Int): Playlist? =
-        PlayQueue.neighbor(list.index, list.items.size, delta, queueModes)?.let { list.copy(index = it) }
-
-    private fun updateNavigation() {
-        val list = playlist ?: return
-        menu.hasPrevious = step(list, -1) != null
-        menu.hasNext = step(list, 1) != null
-    }
-
-    /**
-     * Видео открывается в том же направлении, что и предыдущее: смотрели вбок — центр не съезжает.
-     * [fromMenu] — выбрано в меню: тогда видео встаёт там, где меню.
-     */
-    private fun openPlaylist(next: Playlist, fromMenu: Boolean = false) {
-        savePosition()
-        val wasImage = playlist?.current?.isImage == true
-        playlist = next
-        val item = next.current
-        handler.removeCallbacks(slideshowTick)
-        imageJob?.cancel()
-        menuActions.setZoom(1f)
-        if (item.isImage) {
-            showImage(item)
-        } else {
-            image = null
-            // После фото поверхность занята холстом — декодеру нужна свежая.
-            if (wasImage) renderer.newVideoSurface()?.let { videoSurface = it }
-            videoSurface?.let(player::setVideoSurface)
-            player.setMediaItem(MediaItem.fromUri(item.uri))
-            player.prepare()
-            if (settings.resumePlayback) resume(item)
-            menuActions.setSpeed(1f)
-            player.play()
-        }
-        if (settings.keepHistory) history.opened(item)
-        menu.isImage = item.isImage
-        menu.title = item.title
-        updateNavigation()
-        menu.queue = next.items
-        menu.queueIndex = next.index
-        applyFormat(formats.get(item.uri) ?: item.format)
-        handler.removeCallbacks(saveTick)
-        handler.postDelayed(saveTick, SAVE_INTERVAL_MS)
-        renderer.hasVideo = true
-        if (fromMenu) renderer.centerOnPanel()
-        menu.tab = VrMenuState.Tab.Home
-        panels.hide()
-    }
-
-    private fun applyFormat(format: VideoFormat) {
-        menu.format = format
-        renderer.format = format
-    }
-
-    /** У видео из Darkframe позиция общая с Darkframe, у остальных — своя, на телефоне. */
-    private fun resume(item: PlaylistItem) {
-        val ref = item.darkframe
-        if (ref == null) {
-            positions.get(item.uri)?.let(player::seekTo)
-            return
-        }
-        val server = darkframes.get(ref.serverId) ?: return
-        io.execute {
-            val position = runCatching { DarkframeClient.position(server, ref.itemId) }.getOrNull() ?: return@execute
-            runOnUiThread { if (playlist?.current == item) player.seekTo(position) }
-        }
-    }
-
-    // --- Фото ------------------------------------------------------------------------------
-
-    private var videoSurface: Surface? = null
-    private var image: Bitmap? = null
-    private var imageJob: Job? = null
-    private var slideshowPaused = false
-
-    /** Поверхность кадра от рендерера; после пересоздания GL-контекста — новая. */
-    private fun onVideoSurface(surface: Surface) {
-        videoSurface = surface
-        if (playlist?.current?.isImage == true) drawImage() else player.setVideoSurface(surface)
-    }
-
-    /**
-     * Фото рисуется холстом в ту же поверхность, что и видео: дальше всё как у видео —
-     * проекции, стерео, приближение, окружение.
-     */
-    private fun showImage(item: PlaylistItem) {
-        player.stop()
-        player.clearVideoSurface()
-        image = null
-        imageJob = lifecycleScope.launch {
-            val request = ImageRequest.Builder(this@PlayerActivity)
-                .data(item.uri.toString())
-                .size(MAX_IMAGE_SIDE)
-                .allowHardware(false)
-                .build()
-            val result = SingletonImageLoader.get(this@PlayerActivity).execute(request)
-            val bitmap = (result as? SuccessResult)?.image?.toBitmap()
-            if (bitmap == null) {
-                val reason = (result as? ErrorResult)?.throwable?.describe()
-                panels.showNotice("Не удалось открыть фото${reason?.let { ": $it" } ?: "."}")
-                return@launch
-            }
-            if (playlist?.current != item) return@launch
-            image = bitmap
-            renderer.newVideoSurface()?.let { videoSurface = it }
-            drawImage()
-            scheduleSlideshow()
-        }
-    }
-
-    private fun drawImage() {
-        val bitmap = image ?: return
-        val surface = videoSurface ?: return
-        renderer.setVideoBufferSize(bitmap.width, bitmap.height)
-        renderer.videoAspect = bitmap.width.toFloat() / bitmap.height
-        runCatching {
-            val canvas = surface.lockHardwareCanvas()
-            canvas.drawBitmap(bitmap, 0f, 0f, null)
-            surface.unlockCanvasAndPost(canvas)
-        }
-    }
-
-    private fun slideshowRunning() = settings.slideshow && !slideshowPaused
-
-    private fun scheduleSlideshow() {
-        handler.removeCallbacks(slideshowTick)
-        if (slideshowRunning()) handler.postDelayed(slideshowTick, settings.slideshowSeconds.coerceAtLeast(2) * 1000L)
-    }
-
-    private val slideshowTick = Runnable {
-        if (playlist?.current?.isImage == true && slideshowRunning()) playlist?.let { step(it, 1) }?.let(::openPlaylist)
-    }
-
-    /**
-     * Фото — в окружение: один глаз у стерео, не шире [EnvironmentLayer.CUSTOM_MAX_WIDTH].
-     * Ожидается панорама 360° (2:1); другие пропорции растянутся по сфере.
-     */
-    private fun saveEnvironment(): String {
-        val bitmap = image ?: return "Сначала откройте фото"
-        val eye = when (menu.format.stereo) {
-            StereoLayout.SideBySide -> Bitmap.createBitmap(bitmap, 0, 0, bitmap.width / 2, bitmap.height)
-            StereoLayout.TopBottom -> Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height / 2)
-            StereoLayout.Mono -> bitmap
-        }
-        val width = eye.width.coerceAtMost(EnvironmentLayer.CUSTOM_MAX_WIDTH)
-        val scaled = Bitmap.createScaledBitmap(eye, width, (eye.height * width.toFloat() / eye.width).toInt(), true)
-        environmentFile(this).outputStream().use { scaled.compress(Bitmap.CompressFormat.JPEG, 90, it) }
-        settings.environment = Environment.Custom.name
-        renderer.environmentChanged()
-        val ratio = eye.width.toFloat() / eye.height
-        return if (ratio in 1.8f..2.2f) "Готово: фото теперь вокруг вас." else "Готово, но это не панорама 2:1 — по краям будет растянуто."
-    }
-
-    /** Позиция пишется всегда: включить «продолжать с места» можно и позже. */
-    private fun savePosition() {
-        val item = playlist?.current?.takeIf { !it.isImage } ?: return
-        val position = player.currentPosition
-        val duration = player.duration
-        positions.save(item.uri, position, duration)
-        if (settings.keepHistory && duration > 0) history.progress(item.uri, position, duration)
-        val ref = item.darkframe ?: return
-        val server = darkframes.get(ref.serverId) ?: return
-        if (duration <= 0) return
-        io.execute { runCatching { DarkframeClient.savePosition(server, ref.itemId, position, duration) } }
-    }
-
-    private val saveTick = object : Runnable {
-        override fun run() {
-            if (player.isPlaying) savePosition()
-            handler.postDelayed(this, SAVE_INTERVAL_MS)
-        }
-    }
-
-    // --- Пульт с ПК ------------------------------------------------------------------------
-
-    private fun onRemoteCommand(server: DesktopServer, command: RemoteCommand) {
-        when (command) {
-            RemoteCommand.TogglePlayback -> togglePlayback()
-            is RemoteCommand.SeekBy -> menuActions.seekBy(command.deltaMs)
-            is RemoteCommand.SeekTo -> player.seekTo(command.positionMs)
-            RemoteCommand.PreviousFile -> menuActions.previousFile()
-            RemoteCommand.NextFile -> menuActions.nextFile()
-            RemoteCommand.Recenter -> renderer.recenter()
-            // 2D включается только пальцем на телефоне.
-            RemoteCommand.ToggleStereo -> Unit
-            is RemoteCommand.SetFormat -> VideoFormat.decode(command.format)?.let(menuActions::setFormat)
-            is RemoteCommand.Open -> openFromDesktop(server, command)
-            is RemoteCommand.OpenDarkframe -> openFromDarkframe(server, command)
-        }
-    }
-
-    /**
-     * Видео из Darkframe, выбранное в окне ПК. Телефон открывает его через своё подключение к Darkframe —
-     * того, что работает на том же компьютере (или единственного).
-     */
-    private fun openFromDarkframe(desktop: DesktopServer, command: RemoteCommand.OpenDarkframe) {
-        val all = darkframes.all()
-        val host = Uri.parse(desktop.baseUrl).host
-        val server = all.find { Uri.parse(it.baseUrl).host == host } ?: all.singleOrNull()
-        if (server == null) {
-            panels.showNotice("Подключите телефон к Darkframe: «+ Darkframe» на главном экране.")
-            return
-        }
-        val settingsRef = this
-        val library = MediaLibrary(this)
-        io.execute {
-            val videos = runCatching {
-                kotlinx.coroutines.runBlocking { library.list(MediaSourceRef.Darkframe(server.id), command.collection) }
-            }.getOrNull()?.filter { !it.isDirectory && it.playUri != null } ?: return@execute
-            val index = videos.indexOfFirst { it.path == command.itemId }.takeIf { it >= 0 } ?: return@execute
-            val items = videos.map {
-                PlaylistItem(
-                    it.playUri!!, it.name, VideoFormatDetector.detect(it.formatHint) ?: DefaultFormat.forFile(settingsRef, it.isImage),
-                    it.darkframe, isImage = it.isImage, thumbnail = it.thumbnail,
-                )
-            }
-            runOnUiThread { openPlaylist(Playlist(items, index)) }
-        }
-    }
-
-    /** Видео, выбранное в окне AstraMatic на ПК, — вместе с остальными видео его папки. */
-    private fun openFromDesktop(server: DesktopServer, command: RemoteCommand.Open) {
-        val settingsRef = this
-        io.execute {
-            val parent = command.path.substringBeforeLast('/', "")
-            val videos = runCatching { DesktopClient.list(server, command.folderId, parent) }.getOrNull()
-                ?.filter { !it.isDirectory }
-                ?: return@execute
-            val index = videos.indexOfFirst { it.path == command.path }.takeIf { it >= 0 } ?: return@execute
-            val items = videos.map {
-                val image = VideoFiles.isImage(it.name)
-                val uri = server.fileUri(command.folderId, it.path)
-                PlaylistItem(
-                    uri, it.name,
-                    VideoFormatDetector.detect(it.name) ?: DefaultFormat.forFile(settingsRef, image), isImage = image,
-                    thumbnail = if (image) uri.toString() else "${SmbThumbnailFetcher.HTTP_VIDEO_SCHEME}:$uri",
-                )
-            }
-            runOnUiThread { openPlaylist(Playlist(items, index)) }
-        }
-    }
-
-    // --- Нажатие: кнопка Cardboard или действие «Нажатие» на пульте ------------------------
 
     private fun onScreenTouch(event: MotionEvent) {
         when (event.actionMasked) {
@@ -585,8 +212,6 @@ class PlayerActivity : ComponentActivity() {
             MotionEvent.ACTION_CANCEL -> panels.triggerUp(event.eventTime, cancelled = true)
         }
     }
-
-    // --- Пульт и геймпад: кнопки ------------------------------------------------------------
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         val down = event.action == KeyEvent.ACTION_DOWN
@@ -611,8 +236,8 @@ class PlayerActivity : ComponentActivity() {
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean = when (keyCode) {
         // Отдельные «играть» и «пауза» некоторых пультов работают всегда.
-        KeyEvent.KEYCODE_MEDIA_PLAY -> true.also { player.play() }
-        KeyEvent.KEYCODE_MEDIA_PAUSE -> true.also { player.pause() }
+        KeyEvent.KEYCODE_MEDIA_PLAY -> true.also { media.play() }
+        KeyEvent.KEYCODE_MEDIA_PAUSE -> true.also { media.pause() }
         else -> super.onKeyDown(keyCode, event)
     }
 
@@ -621,8 +246,6 @@ class PlayerActivity : ComponentActivity() {
         val direction = if (louder) AudioManager.ADJUST_RAISE else AudioManager.ADJUST_LOWER
         getSystemService(AudioManager::class.java).adjustStreamVolume(AudioManager.STREAM_MUSIC, direction, 0)
     }
-
-    // --- Пульт и геймпад: оси и колесо мыши ------------------------------------------------
 
     override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
         if (event.actionMasked == MotionEvent.ACTION_SCROLL && input.onWheel(event.getAxisValue(MotionEvent.AXIS_VSCROLL))) {
@@ -642,8 +265,6 @@ class PlayerActivity : ComponentActivity() {
         return true
     }
 
-    // --- Режимы -----------------------------------------------------------------------------
-
     private fun toggleStereoMode() {
         stereoMode = !stereoMode
         menu.stereo = stereoMode
@@ -655,21 +276,6 @@ class PlayerActivity : ComponentActivity() {
     private fun updateModeButton() {
         modeButton.text = if (stereoMode) "2D" else "VR"
         modeButton.visibility = if (uiHost.place == PanelPlace.Screen) View.GONE else View.VISIBLE
-    }
-
-    private fun togglePlayback() {
-        if (playlist?.current?.isImage == true) {
-            // ⏯ у фото: включает слайд-шоу, если оно выключено, иначе ставит на паузу.
-            if (!settings.slideshow) {
-                settings.slideshow = true
-                slideshowPaused = false
-            } else {
-                slideshowPaused = !slideshowPaused
-            }
-            scheduleSlideshow()
-            return
-        }
-        if (player.isPlaying) player.pause() else player.play()
     }
 
     override fun onStart() {
@@ -691,15 +297,14 @@ class PlayerActivity : ComponentActivity() {
 
     override fun onStop() {
         remote.stop()
-        savePosition()
-        player.pause()
+        session.onStop()
         super.onStop()
     }
 
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
         if (::uiHost.isInitialized) uiHost.release()
-        if (::player.isInitialized) player.release()
+        if (::media.isInitialized) media.release()
         io.shutdown()
         super.onDestroy()
     }
@@ -708,12 +313,8 @@ class PlayerActivity : ComponentActivity() {
 
     companion object {
         private const val KEY_STEREO = "stereo"
+
         /** Своя панорама окружения: копия, уменьшенная до [EnvironmentLayer.CUSTOM_MAX_WIDTH]. */
         fun environmentFile(context: Context) = java.io.File(context.filesDir, "environment.jpg")
-
-
-        /** Сторона фото не больше: 8K-панорама в памяти — уже около 130 МБ. */
-        private const val MAX_IMAGE_SIDE = 6144
-        private const val SAVE_INTERVAL_MS = 5_000L
     }
 }
