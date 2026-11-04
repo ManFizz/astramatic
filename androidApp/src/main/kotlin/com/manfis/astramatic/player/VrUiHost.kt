@@ -80,9 +80,9 @@ class VrUiHost(
         if (display == null) {
             virtualDisplay = activity.getSystemService(DisplayManager::class.java).createVirtualDisplay(
                 "AstraMatic VR UI",
-                VrRenderer.PANEL_WIDTH_PX,
-                VrRenderer.PANEL_HEIGHT_PX,
-                VrRenderer.PANEL_DENSITY_DPI,
+                PANEL_WIDTH_PX,
+                PANEL_HEIGHT_PX,
+                PANEL_DENSITY_DPI,
                 surface,
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_PRESENTATION or DisplayManager.VIRTUAL_DISPLAY_FLAG_OWN_CONTENT_ONLY,
             )
@@ -186,7 +186,7 @@ class VrUiHost(
 
     private companion object {
         /** Плотность виртуального дисплея; размер шрифта не увеличиваем — панель и так крупная. */
-        val PANEL_DENSITY = Density(VrRenderer.PANEL_DENSITY_DPI / 160f, fontScale = 1f)
+        val PANEL_DENSITY = Density(PANEL_DENSITY_DPI / 160f, fontScale = 1f)
     }
 
     fun release() {

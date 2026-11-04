@@ -1,6 +1,9 @@
 package com.manfis.astramatic.ui
 
-import com.manfis.astramatic.player.VrRenderer
+import com.manfis.astramatic.player.MAX_MENU_DISTANCE
+import com.manfis.astramatic.player.MAX_MENU_SIZE
+import com.manfis.astramatic.player.MIN_MENU_DISTANCE
+import com.manfis.astramatic.player.MIN_MENU_SIZE
 
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -103,7 +106,7 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
         Slider(
             value = settings.menuDistance,
             onValueChange = { settings.menuDistance = (it * 2).roundToInt() / 2f },
-            valueRange = VrRenderer.MIN_MENU_DISTANCE..VrRenderer.MAX_MENU_DISTANCE,
+            valueRange = MIN_MENU_DISTANCE..MAX_MENU_DISTANCE,
         )
         Text(
             "Дальше — меньше сводить глаза при переходе от видео к меню. Размер меню на глаз тот же.",
@@ -113,7 +116,7 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
         Slider(
             value = settings.menuSize,
             onValueChange = { settings.menuSize = (it * 20).roundToInt() / 20f },
-            valueRange = VrRenderer.MIN_MENU_SIZE..VrRenderer.MAX_MENU_SIZE,
+            valueRange = MIN_MENU_SIZE..MAX_MENU_SIZE,
         )
         Text(
             "В шлеме меню растягивается за уголки, а перетаскивается за полоску под ним: наведите точку и держите нажатие.",

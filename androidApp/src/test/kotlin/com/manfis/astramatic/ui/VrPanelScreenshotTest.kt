@@ -24,7 +24,10 @@ import com.manfis.astramatic.model.StereoLayout
 import com.manfis.astramatic.model.VideoFormat
 import com.manfis.astramatic.player.Playlist
 import com.manfis.astramatic.player.PlaylistItem
-import com.manfis.astramatic.player.VrRenderer
+import com.manfis.astramatic.player.PANEL_DENSITY_DPI
+import com.manfis.astramatic.player.PANEL_HEIGHT_PX
+import com.manfis.astramatic.player.PANEL_WIDTH_PX
+import com.manfis.astramatic.player.PanelLayout
 import com.manfis.astramatic.settings.RemoteAction
 import org.junit.Rule
 import org.junit.Test
@@ -37,7 +40,7 @@ import kotlin.test.assertTrue
 
 /**
  * Панели шлема с настоящей геометрией виртуального дисплея: 1280×800 при 240 dpi,
- * видна только верхняя часть — как в [VrRenderer.PanelLayout]. Эталоны лежат в `src/test/screenshots`.
+ * видна только верхняя часть — как в [PanelLayout]. Эталоны лежат в `src/test/screenshots`.
  */
 @RunWith(RobolectricTestRunner::class)
 @GraphicsMode(GraphicsMode.Mode.NATIVE)
@@ -91,9 +94,9 @@ class VrPanelScreenshotTest {
 
     @Composable
     private fun PanelFrame(visibleHeightPx: Int, content: @Composable () -> Unit) {
-        val density = Density(VrRenderer.PANEL_DENSITY_DPI / 160f, fontScale = 1f)
+        val density = Density(PANEL_DENSITY_DPI / 160f, fontScale = 1f)
         CompositionLocalProvider(LocalDensity provides density) {
-            val width = (VrRenderer.PANEL_WIDTH_PX / density.density).dp
+            val width = (PANEL_WIDTH_PX / density.density).dp
             Box(
                 Modifier
                     .testTag(PANEL)
@@ -105,7 +108,7 @@ class VrPanelScreenshotTest {
                 Box(
                     Modifier
                         .wrapContentSize(Alignment.TopStart, unbounded = true)
-                        .requiredSize(width, (VrRenderer.PANEL_HEIGHT_PX / density.density).dp),
+                        .requiredSize(width, (PANEL_HEIGHT_PX / density.density).dp),
                     contentAlignment = Alignment.TopStart,
                 ) {
                     CompositionLocalProvider(LocalVersionText provides "v1.0 · тест") { content() }
@@ -114,37 +117,37 @@ class VrPanelScreenshotTest {
         }
     }
 
-    private fun shoot(layout: VrRenderer.PanelLayout, name: String, state: VrMenuState) {
+    private fun shoot(layout: PanelLayout, name: String, state: VrMenuState) {
         compose.setContent { PanelFrame(layout.visibleHeightPx) { VrMenu(state, actions) } }
         compose.waitForIdle()
         compose.onNodeWithTag(PANEL).captureRoboImage("src/test/screenshots/$name.png")
     }
 
     @Test
-    fun home() = shoot(VrRenderer.PanelLayout.Menu, "vr_home", VrMenuState())
+    fun home() = shoot(PanelLayout.Menu, "vr_home", VrMenuState())
 
     @Test
-    fun homeWithVideoOpen() = shoot(VrRenderer.PanelLayout.Menu, "vr_home_video_open", playing().apply { mode = VrMenuState.Mode.Menu })
+    fun homeWithVideoOpen() = shoot(PanelLayout.Menu, "vr_home_video_open", playing().apply { mode = VrMenuState.Mode.Menu })
 
     @Test
     fun notice() = shoot(
-        VrRenderer.PanelLayout.Menu,
+        PanelLayout.Menu,
         "vr_home_notice",
         VrMenuState().apply { notice = "Не удалось подключиться к компьютеру: соединение прервано." },
     )
 
     @Test
-    fun controlsVideo() = shoot(VrRenderer.PanelLayout.Controls, "vr_controls_video", playing())
+    fun controlsVideo() = shoot(PanelLayout.Controls, "vr_controls_video", playing())
 
     @Test
-    fun controlsImage() = shoot(VrRenderer.PanelLayout.Controls, "vr_controls_image", playing().apply { isImage = true })
+    fun controlsImage() = shoot(PanelLayout.Controls, "vr_controls_image", playing().apply { isImage = true })
 
     @Test
-    fun sheetView() = shoot(VrRenderer.PanelLayout.ControlsSheet, "vr_sheet_view", playing().apply { sheet = VrMenuState.Sheet.View })
+    fun sheetView() = shoot(PanelLayout.ControlsSheet, "vr_sheet_view", playing().apply { sheet = VrMenuState.Sheet.View })
 
     @Test
     fun sheetViewFlat() = shoot(
-        VrRenderer.PanelLayout.ControlsSheet,
+        PanelLayout.ControlsSheet,
         "vr_sheet_view_flat",
         playing().apply {
             sheet = VrMenuState.Sheet.View
@@ -153,11 +156,11 @@ class VrPanelScreenshotTest {
     )
 
     @Test
-    fun sheetQueue() = shoot(VrRenderer.PanelLayout.ControlsSheet, "vr_sheet_queue", playing().apply { sheet = VrMenuState.Sheet.Queue })
+    fun sheetQueue() = shoot(PanelLayout.ControlsSheet, "vr_sheet_queue", playing().apply { sheet = VrMenuState.Sheet.Queue })
 
     @Test
     fun formatTab() = shoot(
-        VrRenderer.PanelLayout.Menu,
+        PanelLayout.Menu,
         "vr_tab_format",
         playing().apply {
             mode = VrMenuState.Mode.Menu
@@ -166,17 +169,17 @@ class VrPanelScreenshotTest {
     )
 
     @Test
-    fun settingsTab() = shoot(VrRenderer.PanelLayout.Menu, "vr_tab_settings", VrMenuState().apply { tab = VrMenuState.Tab.Settings })
+    fun settingsTab() = shoot(PanelLayout.Menu, "vr_tab_settings", VrMenuState().apply { tab = VrMenuState.Tab.Settings })
 
     @Test
-    fun headsetTab() = shoot(VrRenderer.PanelLayout.Menu, "vr_tab_headset", VrMenuState().apply { tab = VrMenuState.Tab.Headset })
+    fun headsetTab() = shoot(PanelLayout.Menu, "vr_tab_headset", VrMenuState().apply { tab = VrMenuState.Tab.Headset })
 
     @Test
-    fun remoteTab() = shoot(VrRenderer.PanelLayout.Menu, "vr_tab_remote", VrMenuState().apply { tab = VrMenuState.Tab.Remote })
+    fun remoteTab() = shoot(PanelLayout.Menu, "vr_tab_remote", VrMenuState().apply { tab = VrMenuState.Tab.Remote })
 
     @Test
     fun remoteCapture() = shoot(
-        VrRenderer.PanelLayout.Menu,
+        PanelLayout.Menu,
         "vr_tab_remote_capture",
         VrMenuState().apply {
             tab = VrMenuState.Tab.Remote
@@ -188,14 +191,14 @@ class VrPanelScreenshotTest {
     @Test
     fun controlsFitVisibleArea() {
         val state = playing()
-        compose.setContent { PanelFrame(VrRenderer.PanelLayout.Controls.visibleHeightPx) { VrMenu(state, actions) } }
+        compose.setContent { PanelFrame(PanelLayout.Controls.visibleHeightPx) { VrMenu(state, actions) } }
         compose.waitForIdle()
         val panel = compose.onNodeWithTag(PANEL).fetchSemanticsNode().boundsInRoot
         // Настоящие размеры: boundsInRoot обрезан родителем и за край выйти не может,
         // а колонка фиксированной высоты сжимает последний ряд вместо того, чтобы вывести его наружу.
         val chip = compose.onNodeWithText("▤ Очередь").fetchSemanticsNode()
         val bottom = chip.positionInRoot.y + chip.size.height
-        val visible = VrRenderer.PanelLayout.Controls.visibleHeightPx
+        val visible = PanelLayout.Controls.visibleHeightPx
         assertEquals(visible.toFloat(), panel.height, "рамка теста должна совпадать с видимой частью дисплея")
         assertTrue(bottom - panel.top <= visible, "ряд кнопок ниже видимой части: ${bottom - panel.top} из $visible px")
         assertTrue(chip.size.height >= MIN_LABEL_HEIGHT_PX, "подпись кнопки сжата: ${chip.size.height} px")

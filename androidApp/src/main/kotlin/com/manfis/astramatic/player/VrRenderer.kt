@@ -13,13 +13,8 @@ import com.manfis.astramatic.model.StereoLayout
 import com.manfis.astramatic.model.VideoFormat
 import com.manfis.astramatic.settings.AppSettings
 import java.util.concurrent.atomic.AtomicBoolean
-import java.util.concurrent.atomic.AtomicInteger
 import javax.microedition.khronos.egl.EGLConfig
 import kotlin.math.PI
-import kotlin.math.abs
-import kotlin.math.asin
-import kotlin.math.hypot
-import kotlin.math.atan2
 import java.io.File
 
 /**
@@ -39,8 +34,18 @@ class VrRenderer(
     /** Поправка ухода поворота по компасу; null — компаса нет. */
     private val compass: CompassDrift? = null,
     /** Меню растянули за уголок и отпустили (GL-поток): новый размер — запомнить. */
-    private val onMenuSizeChanged: (Float) -> Unit = {},
+    onMenuSizeChanged: (Float) -> Unit = {},
 ) : CardboardView.Renderer {
+
+    /** Положение видео и панели, попадание взгляда: всё, что не про рисование. */
+    private val tracker = PanelTracker(
+        prefs = object : PanelPreferences {
+            override val recenterPitch get() = settings.recenterPitch
+            override val menuDistance get() = settings.menuDistance
+            override val menuSize get() = settings.menuSize
+        },
+        onMenuSizeChanged = onMenuSizeChanged,
+    )
 
     @Volatile var format = VideoFormat()
 
@@ -53,48 +58,21 @@ class VrRenderer(
     /** Приближение видео и окружения: 1 — как есть, больше — крупнее. Меню не приближается. */
     @Volatile var zoom = 1f
 
-    @Volatile var panelVisible = false
+    var panelVisible by tracker::panelVisible
 
     /** Настройка шлема: вокруг калибровочная комната, видео не показываем. */
     @Volatile var calibration = false
 
-    /**
-     * Какую часть виртуального дисплея показывать и где.
-     * [visibleHeightPx] — сколько пикселей сверху дисплея видно, [width] — ширина в метрах,
-     * [centerY] — высота центра относительно глаз в метрах.
-     */
-    enum class PanelLayout(val visibleHeightPx: Int, val width: Float, val centerY: Float) {
-        Menu(PANEL_HEIGHT_PX, 2.2f, 0f),
-        /** Полоска управления: верхние 360 px (240 dp при плотности панели), чуть ниже взгляда. */
-        Controls(360, 2.0f, -0.6f),
-
-        /**
-         * Полоска с раскрытой над ней панелью (вид или очередь): 735 px = 240 + 250 dp.
-         * Нижний край — там же, где у простой полоски, панель растёт вверх, к взгляду.
-         */
-        ControlsSheet(735, 2.0f, -0.307f);
-
-        val height: Float get() = width * visibleHeightPx / PANEL_WIDTH_PX
-        val visibleFraction: Float get() = visibleHeightPx.toFloat() / PANEL_HEIGHT_PX
-    }
-
-    @Volatile var panelLayout = PanelLayout.Menu
+    var panelLayout by tracker::layout
 
     /** Точка взгляда на панели в пикселях панели, null — взгляд мимо. Обновляется каждый кадр. */
-    @Volatile var gaze: Gaze? = null
-        private set
-
-    data class Gaze(val x: Float, val y: Float)
-
-    /** За что можно взяться у меню: уголки — растянуть, полоска под меню — перетащить. */
-    enum class Handle { None, TopLeft, TopRight, BottomLeft, BottomRight, Move }
+    val gaze: Gaze? get() = tracker.gaze
 
     /** Что из [Handle] сейчас под взглядом. Обновляется каждый кадр. */
-    @Volatile var hoverHandle = Handle.None
-        private set
+    val hoverHandle: Handle get() = tracker.hoverHandle
 
     /** Взялись (из UI-потока): что держат; [Handle.None] — отпустили. */
-    @Volatile var grab = Handle.None
+    var grab by tracker::grab
 
     /** Заполнение кольца вокруг курсора при нажатии взглядом, 0..1. */
     @Volatile var dwellProgress = 0f
@@ -170,49 +148,12 @@ class VrRenderer(
     private var shapeColor = 0
     private val shapeModel = FloatArray(16)
 
-    private val recenterRequested = AtomicBoolean(true)
-    private val centerOnPanelRequested = AtomicBoolean(false)
-    private val placePanelRequested = AtomicBoolean(true)
-
-    /**
-     * Первые кадры после запуска трекинг головы ещё не определился с направлением. Пока он устаканивается,
-     * панель не показываем (иначе она «тянется» за взглядом), а ставим и центрируем видео один раз — после.
-     */
-    private val settleFrames = AtomicInteger(SETTLE_FRAMES)
-
     private val headView = FloatArray(16)
-
-    /** Во сколько раз меню дальше базовых [PANEL_DISTANCE] (и во столько же раз больше). */
-    private var panelScale = 1f
-
-    /** Панель в метрах этого кадра: ширина, высота, высота центра, плоскость (z < 0). */
-    private var panelW = 0f
-    private var panelH = 0f
-    private var panelCy = 0f
-    private var panelZ = -PANEL_DISTANCE
-
-    /** Куда взгляд попадает на плоскости панели, метры от её оси; NaN — мимо плоскости. */
-    private var hitX = Float.NaN
-    private var hitY = Float.NaN
-
-    private var activeHandle = Handle.None
-    private var grabYawOffset = 0f
-    private var grabPitchOffset = 0f
-    private var grabStartDistance = 0f
-    private var grabStartSize = 1f
-
-    /** Размер меню, пока его растягивают (и пока новый не записан в настройки); иначе NaN. */
-    private var liveMenuSize = Float.NaN
 
     /** Проявление панели 0..1: появляется плавно, а не выскакивает. */
     private var appear = 0f
     private var lastFrameNanos = 0L
     private var lastLayout = PanelLayout.Menu
-    private var videoYawDeg = 0f
-    private var videoPitchDeg = 0f
-    private var panelYawDeg = 0f
-    private var panelPitchDeg = 0f
-    private var controlsFollowing = false
     private val videoModel = FloatArray(16)
     private val panelModel = FloatArray(16)
     private val cursorModel = FloatArray(16)
@@ -222,23 +163,21 @@ class VrRenderer(
     private val environmentModel = FloatArray(16)
     private val panelRotation = FloatArray(16)
     private val rotation = FloatArray(16)
-    private val direction = FloatArray(4)
-    private val localDirection = FloatArray(4)
 
     /**
      * Повернуть видео так, чтобы его центр оказался там, куда сейчас смотрит голова:
      * по горизонтали, а в режиме «лёжа» — и по вертикали.
      */
-    fun recenter() = recenterRequested.set(true)
+    fun recenter() = tracker.recenter()
 
     /** Повернуть видео к панели: файл выбран в меню — пусть начнётся там, где меню. */
-    fun centerOnPanel() = centerOnPanelRequested.set(true)
+    fun centerOnPanel() = tracker.centerOnPanel()
 
     /** Поставить панель перед взглядом. */
-    fun placePanelInFront() = placePanelRequested.set(true)
+    fun placePanelInFront() = tracker.placePanelInFront()
 
     /** Трекинг ещё устаканивается после запуска: панель не видна. */
-    private val settling get() = settleFrames.get() > 0
+    private val settling get() = tracker.settling
 
     override fun onSurfaceCreated(config: EGLConfig?) {
         textureProgram = GlUtil.program(TEXTURE_VERTEX_SHADER, TEXTURE_FRAGMENT_SHADER)
@@ -278,83 +217,22 @@ class VrRenderer(
         headTransform.getHeadView(headView, 0)
         correctDrift()
         // Направление взгляда в мире: третья строка матрицы вида со знаком минус.
-        direction[0] = -headView[2]
-        direction[1] = -headView[6]
-        direction[2] = -headView[10]
-        direction[3] = 0f
-        val lookYawDeg = Math.toDegrees(atan2(-direction[0], -direction[2]).toDouble()).toFloat()
-        val truePitchDeg = Math.toDegrees(asin(direction[1].coerceIn(-1f, 1f).toDouble())).toFloat()
-        val lookPitchDeg = if (settings.recenterPitch) truePitchDeg else 0f
-
-        if (!lookYawDeg.isNaN()) {
-            val grabbed = grab
-            if (activeHandle == Handle.None && grabbed != Handle.None && !settling) {
-                startGrab(grabbed, lookYawDeg, truePitchDeg)
-            } else if (activeHandle != Handle.None && grabbed == Handle.None) {
-                endGrab()
-            }
-            if (settling) {
-                settleFrames.decrementAndGet()
-                if (recenterRequested.get()) {
-                    videoYawDeg = lookYawDeg
-                    videoPitchDeg = lookPitchDeg
-                }
-            } else if (recenterRequested.getAndSet(false)) {
-                videoYawDeg = lookYawDeg
-                videoPitchDeg = lookPitchDeg
-            }
-            if (settling || placePanelRequested.getAndSet(false)) {
-                panelYawDeg = lookYawDeg
-                panelPitchDeg = lookPitchDeg
-            } else if (activeHandle == Handle.Move) {
-                // Меню едет за взглядом, сохраняя, где за него взялись.
-                panelYawDeg = wrapDegrees(lookYawDeg + grabYawOffset)
-                panelPitchDeg = (truePitchDeg + grabPitchOffset).coerceIn(-MAX_MENU_PITCH, MAX_MENU_PITCH)
-            } else if (panelLayout != PanelLayout.Menu) {
-                // Полоска мягко догоняет взгляд, если отвернуться от неё далеко в сторону, и встаёт по центру.
-                val diff = wrapDegrees(lookYawDeg - panelYawDeg)
-                if (abs(diff) > CONTROLS_FOLLOW_DEG) controlsFollowing = true
-                if (controlsFollowing) {
-                    panelYawDeg = wrapDegrees(panelYawDeg + diff * CONTROLS_FOLLOW_SPEED)
-                    if (abs(diff) < 1f) controlsFollowing = false
-                }
-            }
-        }
-
-        if (!settling && centerOnPanelRequested.getAndSet(false)) {
-            videoYawDeg = panelYawDeg
-            videoPitchDeg = panelPitchDeg
-        }
+        tracker.update(-headView[2], -headView[6], -headView[10])
 
         updateVideoModel(format)
         val layout = panelLayout
         updateAppear(layout)
-        Matrix.setRotateM(panelRotation, 0, panelYawDeg, 0f, 1f, 0f)
-        if (panelPitchDeg != 0f) Matrix.rotateM(panelRotation, 0, panelPitchDeg, 1f, 0f, 0f)
-        // Меню дальше — то же по видимому размеру, но глазам меньше сводиться при переходе от видео к меню.
-        val scale = settings.menuDistance.coerceIn(MIN_MENU_DISTANCE, MAX_MENU_DISTANCE) / PANEL_DISTANCE
-        panelScale = scale
-        val size = if (layout == PanelLayout.Menu) menuSize() else 1f
-        panelW = layout.width * scale * size
-        panelH = layout.height * scale * size
-        panelCy = layout.centerY * scale
-        panelZ = -PANEL_DISTANCE * scale
+        Matrix.setRotateM(panelRotation, 0, tracker.panelYawDeg, 0f, 1f, 0f)
+        if (tracker.panelPitchDeg != 0f) Matrix.rotateM(panelRotation, 0, tracker.panelPitchDeg, 1f, 0f, 0f)
         // Появляясь, панель чуть «подплывает»: из 97% размера в 100%.
         val pop = 0.97f + 0.03f * ease(appear)
-        Matrix.translateM(panelModel, 0, panelRotation, 0, 0f, panelCy, panelZ)
-        Matrix.scaleM(panelModel, 0, panelW * pop, panelH * pop, 1f)
+        Matrix.translateM(panelModel, 0, panelRotation, 0, 0f, tracker.panelCy, tracker.panelZ)
+        Matrix.scaleM(panelModel, 0, tracker.panelW * pop, tracker.panelH * pop, 1f)
 
-        updateHit()
-        if (activeHandle != Handle.None && activeHandle != Handle.Move) resizeMenu()
         val interactive = panelVisible && !settling
-        hoverHandle = when {
-            activeHandle != Handle.None -> activeHandle
-            interactive && layout == PanelLayout.Menu -> findHandle()
-            else -> Handle.None
-        }
-        gaze = if (interactive && activeHandle == Handle.None) computeGaze(layout) else null
-        if (interactive && !hitX.isNaN()) {
-            Matrix.translateM(cursorModel, 0, panelRotation, 0, hitX, hitY, panelZ + CURSOR_LIFT * scale)
+        if (interactive && !tracker.hitX.isNaN()) {
+            val scale = tracker.panelScale
+            Matrix.translateM(cursorModel, 0, panelRotation, 0, tracker.hitX, tracker.hitY, tracker.panelZ + CURSOR_LIFT * scale)
             Matrix.scaleM(cursorModel, 0, CURSOR_SIZE * scale, CURSOR_SIZE * scale, 1f)
         }
     }
@@ -373,82 +251,6 @@ class VrRenderer(
 
     private fun ease(t: Float): Float = 1f - (1f - t) * (1f - t) * (1f - t)
 
-    /** Размер меню (множитель к обычному): во время растягивания — живой, иначе из настроек. */
-    private fun menuSize(): Float {
-        val saved = settings.menuSize.coerceIn(MIN_MENU_SIZE, MAX_MENU_SIZE)
-        val live = liveMenuSize
-        if (live.isNaN()) return saved
-        // Новый размер дошёл до настроек — дальше снова по ним.
-        if (activeHandle == Handle.None && abs(saved - live) < 0.0001f) {
-            liveMenuSize = Float.NaN
-            return saved
-        }
-        return live
-    }
-
-    private fun startGrab(handle: Handle, lookYawDeg: Float, truePitchDeg: Float) {
-        activeHandle = handle
-        if (handle == Handle.Move) {
-            grabYawOffset = wrapDegrees(panelYawDeg - lookYawDeg)
-            grabPitchOffset = panelPitchDeg - truePitchDeg
-        } else {
-            grabStartSize = menuSize()
-            grabStartDistance = if (hitX.isNaN()) 0f else hypot(hitX, hitY - panelCy)
-            liveMenuSize = grabStartSize
-        }
-    }
-
-    private fun endGrab() {
-        val wasResize = activeHandle != Handle.Move
-        activeHandle = Handle.None
-        if (wasResize && !liveMenuSize.isNaN()) onMenuSizeChanged(liveMenuSize)
-    }
-
-    /** Уголок тянут от центра — меню растёт, к центру — уменьшается; пропорции те же. */
-    private fun resizeMenu() {
-        if (hitX.isNaN() || grabStartDistance <= 0f) return
-        val distance = hypot(hitX, hitY - panelCy)
-        liveMenuSize = (grabStartSize * distance / grabStartDistance).coerceIn(MIN_MENU_SIZE, MAX_MENU_SIZE)
-    }
-
-    /** Пересечение взгляда с плоскостью панели (в том числе за её краями) — в [hitX], [hitY]. */
-    private fun updateHit() {
-        // Поворот панели — чистое вращение, обратное к нему — транспонированное.
-        Matrix.transposeM(rotation, 0, panelRotation, 0)
-        Matrix.multiplyMV(localDirection, 0, rotation, 0, direction, 0)
-        val dz = localDirection[2]
-        if (dz > -0.01f) {
-            hitX = Float.NaN
-            hitY = Float.NaN
-            return
-        }
-        val t = panelZ / dz
-        hitX = localDirection[0] * t
-        hitY = localDirection[1] * t
-    }
-
-    /** Уголок или полоска под взглядом. Уголки — снаружи меню, чтобы не мешать его кнопкам. */
-    private fun findHandle(): Handle {
-        if (hitX.isNaN()) return Handle.None
-        val s = panelScale
-        val halfW = panelW / 2
-        val top = panelCy + panelH / 2
-        val bottom = panelCy - panelH / 2
-        val barY = bottom - BAR_GAP * s
-        if (abs(hitX) < panelW * BAR_WIDTH / 2 + BAR_HIT * s && abs(hitY - barY) < BAR_HIT * s) return Handle.Move
-        val inset = EDGE_INSET * s
-        val inside = abs(hitX) < halfW - inset && hitY < top - inset && hitY > bottom + inset
-        if (inside) return Handle.None
-        val reach = CORNER_HIT * s
-        return when {
-            abs(hitX + halfW) < reach && abs(hitY - top) < reach -> Handle.TopLeft
-            abs(hitX - halfW) < reach && abs(hitY - top) < reach -> Handle.TopRight
-            abs(hitX + halfW) < reach && abs(hitY - bottom) < reach -> Handle.BottomLeft
-            abs(hitX - halfW) < reach && abs(hitY - bottom) < reach -> Handle.BottomRight
-            else -> Handle.None
-        }
-    }
-
     /**
      * Гироскоп со временем уводит поворот в сторону — поворачиваем мир обратно на оценку ухода по компасу.
      * Дальше всё (взгляд, глаза) считается уже по исправленному виду.
@@ -456,17 +258,6 @@ class VrRenderer(
     private fun correctDrift() {
         val drift = compass?.correction(headView, settings.compassCorrection) ?: return
         if (drift != 0f) Matrix.rotateM(headView, 0, drift, 0f, 1f, 0f)
-    }
-
-    private fun wrapDegrees(deg: Float): Float = ((deg + 540f) % 360f) - 180f
-
-    /** Точка взгляда на панели в пикселях виртуального дисплея; null — мимо панели. */
-    private fun computeGaze(layout: PanelLayout): Gaze? {
-        if (hitX.isNaN()) return null
-        val u = hitX / panelW + 0.5f
-        val v = 0.5f - (hitY - panelCy) / panelH
-        if (u !in 0f..1f || v !in 0f..1f) return null
-        return Gaze(u * PANEL_WIDTH_PX, v * layout.visibleHeightPx)
     }
 
     override fun onDrawEye(eye: CardboardView.Eye) {
@@ -508,13 +299,15 @@ class VrRenderer(
      */
     private fun drawHandles(eye: CardboardView.Eye, projection: FloatArray, hovered: Handle) {
         GLES20.glUseProgram(shapeProgram)
-        val s = panelScale
+        val s = tracker.panelScale
         val fade = ease(appear)
+        val panelW = tracker.panelW
+        val panelCy = tracker.panelCy
         val halfW = panelW / 2
-        val halfH = panelH / 2
-        val out = CORNER_OFFSET * s
-        val arm = CORNER_ARM * s
-        val thick = HANDLE_THICKNESS * s
+        val halfH = tracker.panelH / 2
+        val out = PanelTracker.CORNER_OFFSET * s
+        val arm = PanelTracker.CORNER_ARM * s
+        val thick = PanelTracker.HANDLE_THICKNESS * s
         val corners = listOf(
             Handle.TopLeft to (-1f to 1f), Handle.TopRight to (1f to 1f),
             Handle.BottomLeft to (-1f to -1f), Handle.BottomRight to (1f to -1f),
@@ -529,12 +322,12 @@ class VrRenderer(
             drawShape(eye, projection, px, py - sy * (arm - thick) / 2, thick, arm, alpha)
         }
         val barAlpha = (if (hovered == Handle.Move) HANDLE_ACTIVE_ALPHA else HANDLE_IDLE_ALPHA) * fade
-        drawShape(eye, projection, 0f, panelCy - halfH - BAR_GAP * s, panelW * BAR_WIDTH, thick * 1.4f, barAlpha)
+        drawShape(eye, projection, 0f, panelCy - halfH - PanelTracker.BAR_GAP * s, panelW * PanelTracker.BAR_WIDTH, thick * 1.4f, barAlpha)
     }
 
     /** Скруглённая белая плашка на плоскости панели: центр и размер в метрах. */
     private fun drawShape(eye: CardboardView.Eye, projection: FloatArray, cx: Float, cy: Float, w: Float, h: Float, alpha: Float) {
-        Matrix.translateM(shapeModel, 0, panelRotation, 0, cx, cy, panelZ + CURSOR_LIFT * panelScale / 2)
+        Matrix.translateM(shapeModel, 0, panelRotation, 0, cx, cy, tracker.panelZ + CURSOR_LIFT * tracker.panelScale / 2)
         Matrix.scaleM(shapeModel, 0, w, h, 1f)
         Matrix.multiplyMM(viewModel, 0, eye.eyeView, 0, shapeModel, 0)
         Matrix.multiplyMM(mvp, 0, projection, 0, viewModel, 0)
@@ -571,8 +364,8 @@ class VrRenderer(
         val mode = Environment.entries.find { it.name == settings.environment } ?: Environment.Black
         val rect = eyeRect(format.stereo, eye.eyeType == CardboardView.Eye.RIGHT)
         // Окружение стоит вокруг зрителя вслед за видео (кинозал — «за экраном»), но без наклона самого видео.
-        Matrix.setRotateM(environmentModel, 0, videoYawDeg, 0f, 1f, 0f)
-        if (videoPitchDeg != 0f) Matrix.rotateM(environmentModel, 0, videoPitchDeg, 1f, 0f, 0f)
+        Matrix.setRotateM(environmentModel, 0, tracker.videoYawDeg, 0f, 1f, 0f)
+        if (tracker.videoPitchDeg != 0f) Matrix.rotateM(environmentModel, 0, tracker.videoPitchDeg, 1f, 0f, 0f)
         // Без переноса головы: окружение «на бесконечности», к нему не подойти.
         eye.eyeView.copyInto(viewModel)
         viewModel[12] = 0f
@@ -586,7 +379,7 @@ class VrRenderer(
 
     /** Комната стоит передней стеной к меню и без приближения: так честно видны линзы. */
     private fun drawCalibration(eye: CardboardView.Eye) {
-        Matrix.setRotateM(environmentModel, 0, panelYawDeg, 0f, 1f, 0f)
+        Matrix.setRotateM(environmentModel, 0, tracker.panelYawDeg, 0f, 1f, 0f)
         eye.eyeView.copyInto(viewModel)
         viewModel[12] = 0f
         viewModel[13] = 0f
@@ -663,8 +456,8 @@ class VrRenderer(
 
     /** Плоский экран уже в метрах (см. [flatScreen]), здесь только поворот: рецентр и наклон. */
     private fun updateVideoModel(format: VideoFormat) {
-        Matrix.setRotateM(videoModel, 0, videoYawDeg, 0f, 1f, 0f)
-        if (videoPitchDeg != 0f) Matrix.rotateM(videoModel, 0, videoPitchDeg, 1f, 0f, 0f)
+        Matrix.setRotateM(videoModel, 0, tracker.videoYawDeg, 0f, 1f, 0f)
+        if (tracker.videoPitchDeg != 0f) Matrix.rotateM(videoModel, 0, tracker.videoPitchDeg, 1f, 0f, 0f)
         if (format.tiltDeg != 0) Matrix.rotateM(videoModel, 0, format.tiltDeg.toFloat(), 1f, 0f, 0f)
     }
 
@@ -742,37 +535,10 @@ class VrRenderer(
     }
 
     companion object {
-        /** Размер виртуального дисплея панели. */
-        const val PANEL_WIDTH_PX = 1280
-        const val PANEL_HEIGHT_PX = 800
-        const val PANEL_DENSITY_DPI = 240
-
-        private const val PANEL_DISTANCE = 2.5f
-        const val MIN_MENU_DISTANCE = 1.5f
-        const val MAX_MENU_DISTANCE = 12f
-        private const val SETTLE_FRAMES = 45
-        /** Полоска шириной ±20° от центра; дальше 30° — уже точно смотрят не на неё. */
-        private const val CONTROLS_FOLLOW_DEG = 30f
-        private const val CONTROLS_FOLLOW_SPEED = 0.08f
         private const val CURSOR_SIZE = 0.05f
         private const val CURSOR_LIFT = 0.01f
-
-        /** Размер меню, множитель к обычному: столько можно растянуть или сжать за уголок. */
-        const val MIN_MENU_SIZE = 0.6f
-        const val MAX_MENU_SIZE = 1.8f
-        private const val MAX_MENU_PITCH = 70f
         private const val APPEAR_S = 0.18f
 
-        // Уголки и полоска-ручка, метры при базовом расстоянии меню (дальше меню — пропорционально больше).
-        private const val CORNER_OFFSET = 0.05f
-        private const val CORNER_ARM = 0.16f
-        private const val CORNER_HIT = 0.16f
-        private const val HANDLE_THICKNESS = 0.024f
-        private const val EDGE_INSET = 0.03f
-        private const val BAR_GAP = 0.08f
-        private const val BAR_HIT = 0.07f
-        /** Ширина полоски — доля ширины меню. */
-        private const val BAR_WIDTH = 0.18f
         private const val HANDLE_IDLE_ALPHA = 0.35f
         private const val HANDLE_ACTIVE_ALPHA = 0.95f
 

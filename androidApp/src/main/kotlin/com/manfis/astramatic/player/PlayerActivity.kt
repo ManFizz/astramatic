@@ -592,9 +592,9 @@ class PlayerActivity : ComponentActivity() {
     /** Какую часть виртуального дисплея и где показывает рендерер: меню, полоску или полоску с панелью. */
     private fun updatePanelLayout() {
         renderer.panelLayout = when {
-            menu.mode == VrMenuState.Mode.Menu -> VrRenderer.PanelLayout.Menu
-            menu.sheet != null -> VrRenderer.PanelLayout.ControlsSheet
-            else -> VrRenderer.PanelLayout.Controls
+            menu.mode == VrMenuState.Mode.Menu -> PanelLayout.Menu
+            menu.sheet != null -> PanelLayout.ControlsSheet
+            else -> PanelLayout.Controls
         }
     }
 
@@ -647,7 +647,7 @@ class PlayerActivity : ComponentActivity() {
         menu.notice = null
         menu.sheet = null
         grabbing = false
-        renderer.grab = VrRenderer.Handle.None
+        renderer.grab = Handle.None
         handler.removeCallbacks(hoverTick)
         uiHost.hover(null, null)
         renderer.panelVisible = false
@@ -678,7 +678,7 @@ class PlayerActivity : ComponentActivity() {
      * Полоска сама уходит, если идёт видео, а смотрят не на неё: панель не раскрыта, ничего не держат.
      * true — спрятали.
      */
-    private fun autoHideControls(gaze: VrRenderer.Gaze?): Boolean {
+    private fun autoHideControls(gaze: Gaze?): Boolean {
         val now = SystemClock.uptimeMillis()
         val watching = menu.mode == VrMenuState.Mode.Controls && menu.sheet == null && !pressedOnPanel &&
             !grabbing && gaze == null && player.isPlaying && playlist?.current?.isImage != true
@@ -692,11 +692,11 @@ class PlayerActivity : ComponentActivity() {
     }
 
     // Нажатие взглядом: точка простояла на месте dwellMs — нажимаем. Следующее — только после сдвига взгляда.
-    private var dwellAnchor: VrRenderer.Gaze? = null
+    private var dwellAnchor: Gaze? = null
     private var dwellStart = 0L
     private var dwellFired = false
 
-    private fun updateDwell(gaze: VrRenderer.Gaze?) {
+    private fun updateDwell(gaze: Gaze?) {
         if (!settings.dwellClick || gaze == null || pressedOnPanel) {
             dwellAnchor = null
             renderer.dwellProgress = 0f
@@ -731,7 +731,7 @@ class PlayerActivity : ComponentActivity() {
 
     /** Держат уголок или полоску меню: нажатие не уходит в интерфейс. */
     private var grabbing = false
-    private var lastGaze: VrRenderer.Gaze? = null
+    private var lastGaze: Gaze? = null
 
     /** Пока нажатие держат на панели, точка следует за взглядом: так прокручиваются списки и двигаются ползунки. */
     private val dragTick = object : Runnable {
@@ -756,7 +756,7 @@ class PlayerActivity : ComponentActivity() {
     private fun triggerDown(time: Long) {
         pressStart = time
         val handle = renderer.hoverHandle
-        if (uiHost.place == VrUiHost.Place.Vr && handle != VrRenderer.Handle.None) {
+        if (uiHost.place == VrUiHost.Place.Vr && handle != Handle.None) {
             grabbing = true
             renderer.grab = handle
             return
@@ -773,7 +773,7 @@ class PlayerActivity : ComponentActivity() {
     private fun triggerUp(time: Long, cancelled: Boolean) {
         if (grabbing) {
             grabbing = false
-            renderer.grab = VrRenderer.Handle.None
+            renderer.grab = Handle.None
             return
         }
         if (pressedOnPanel) {
