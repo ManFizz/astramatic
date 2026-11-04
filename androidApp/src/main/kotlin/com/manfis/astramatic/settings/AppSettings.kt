@@ -11,7 +11,7 @@ import kotlin.reflect.KProperty
  * Настройки приложения. Значения — Compose-состояние, поэтому экраны обновляются сами,
  * а каждое изменение сразу пишется в SharedPreferences.
  */
-class AppSettings private constructor(private val prefs: SharedPreferences) {
+class AppSettings internal constructor(private val prefs: SharedPreferences) {
 
     /** Продолжать видео с места остановки. */
     var resumePlayback by pref("resume_playback", false)

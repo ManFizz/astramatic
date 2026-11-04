@@ -35,7 +35,7 @@ class VrRenderer(
     private val compass: CompassDrift? = null,
     /** Меню растянули за уголок и отпустили (GL-поток): новый размер — запомнить. */
     onMenuSizeChanged: (Float) -> Unit = {},
-) : CardboardView.Renderer {
+) : CardboardView.Renderer, VrScene {
 
     /** Положение видео и панели, попадание взгляда: всё, что не про рисование. */
     private val tracker = PanelTracker(
@@ -47,35 +47,35 @@ class VrRenderer(
         onMenuSizeChanged = onMenuSizeChanged,
     )
 
-    @Volatile var format = VideoFormat()
+    @Volatile override var format = VideoFormat()
 
     /** Ширина / высота всего видеокадра (с обоими глазами). */
     @Volatile var videoAspect = 16f / 9f
 
     /** Пока видео (или фото) не открыто, вокруг только окружение и панель. */
-    @Volatile var hasVideo = false
+    @Volatile override var hasVideo = false
 
     /** Приближение видео и окружения: 1 — как есть, больше — крупнее. Меню не приближается. */
-    @Volatile var zoom = 1f
+    @Volatile override var zoom = 1f
 
-    var panelVisible by tracker::panelVisible
+    override var panelVisible by tracker::panelVisible
 
     /** Настройка шлема: вокруг калибровочная комната, видео не показываем. */
-    @Volatile var calibration = false
+    @Volatile override var calibration = false
 
-    var panelLayout by tracker::layout
+    override var panelLayout by tracker::layout
 
     /** Точка взгляда на панели в пикселях панели, null — взгляд мимо. Обновляется каждый кадр. */
-    val gaze: Gaze? get() = tracker.gaze
+    override val gaze: Gaze? get() = tracker.gaze
 
     /** Что из [Handle] сейчас под взглядом. Обновляется каждый кадр. */
-    val hoverHandle: Handle get() = tracker.hoverHandle
+    override val hoverHandle: Handle get() = tracker.hoverHandle
 
     /** Взялись (из UI-потока): что держат; [Handle.None] — отпустили. */
-    var grab by tracker::grab
+    override var grab by tracker::grab
 
     /** Заполнение кольца вокруг курсора при нажатии взглядом, 0..1. */
-    @Volatile var dwellProgress = 0f
+    @Volatile override var dwellProgress = 0f
 
     /** Геометрия зависит от проекции и угла: строится один раз на сочетание (только на GL-потоке). */
     private val meshes = HashMap<Pair<Projection, Int>, Mesh>()
@@ -168,13 +168,13 @@ class VrRenderer(
      * Повернуть видео так, чтобы его центр оказался там, куда сейчас смотрит голова:
      * по горизонтали, а в режиме «лёжа» — и по вертикали.
      */
-    fun recenter() = tracker.recenter()
+    override fun recenter() = tracker.recenter()
 
     /** Повернуть видео к панели: файл выбран в меню — пусть начнётся там, где меню. */
-    fun centerOnPanel() = tracker.centerOnPanel()
+    override fun centerOnPanel() = tracker.centerOnPanel()
 
     /** Поставить панель перед взглядом. */
-    fun placePanelInFront() = tracker.placePanelInFront()
+    override fun placePanelInFront() = tracker.placePanelInFront()
 
     /** Трекинг ещё устаканивается после запуска: панель не видна. */
     private val settling get() = tracker.settling

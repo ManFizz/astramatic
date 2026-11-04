@@ -40,7 +40,7 @@ class VrUiHost(
     private val activity: ComponentActivity,
     private val screenOverlay: FrameLayout,
     content: @Composable () -> Unit,
-) {
+) : PanelHost {
     /** Масштаб берётся из контекста активности (экран телефона), а на панели свой — подменяем его. */
     private var inVr by mutableStateOf(false)
 
@@ -68,9 +68,7 @@ class VrUiHost(
     private var touchDownTime = 0L
     private var hovering = false
 
-    enum class Place { Hidden, Vr, Screen }
-
-    var place = Place.Hidden
+    override var place = PanelPlace.Hidden
         private set
 
     /** Поверхность панели от рендерера; приходит заново после пересоздания GL-контекста. */
@@ -89,11 +87,11 @@ class VrUiHost(
         } else {
             display.surface = surface
         }
-        if (place == Place.Vr) showInVr()
+        if (place == PanelPlace.Vr) showInVr()
     }
 
-    fun showInVr() {
-        place = Place.Vr
+    override fun showInVr() {
+        place = PanelPlace.Vr
         inVr = true
         val display = virtualDisplay?.display ?: return
         if (presentation?.display?.displayId == display.displayId && presentation?.isShowing == true) return
@@ -106,8 +104,8 @@ class VrUiHost(
         }
     }
 
-    fun showOnScreen() {
-        place = Place.Screen
+    override fun showOnScreen() {
+        place = PanelPlace.Screen
         inVr = false
         if (composeView.parent === screenOverlay) return
         detach()
@@ -115,8 +113,8 @@ class VrUiHost(
         screenOverlay.visibility = android.view.View.VISIBLE
     }
 
-    fun hide() {
-        place = Place.Hidden
+    override fun hide() {
+        place = PanelPlace.Hidden
         detach()
     }
 
@@ -127,11 +125,16 @@ class VrUiHost(
         presentation = null
     }
 
-    /** Нажатие, перетаскивание и отпускание по точке взгляда (x, y в пикселях панели). */
-    fun touch(action: Int, x: Float, y: Float) {
+    override fun touch(phase: TouchPhase, x: Float, y: Float) {
         val root = presentation?.window?.decorView ?: return
         val now = SystemClock.uptimeMillis()
-        if (action == MotionEvent.ACTION_DOWN) touchDownTime = now
+        val action = when (phase) {
+            TouchPhase.Down -> MotionEvent.ACTION_DOWN
+            TouchPhase.Move -> MotionEvent.ACTION_MOVE
+            TouchPhase.Up -> MotionEvent.ACTION_UP
+            TouchPhase.Cancel -> MotionEvent.ACTION_CANCEL
+        }
+        if (phase == TouchPhase.Down) touchDownTime = now
         val event = MotionEvent.obtain(touchDownTime, now, action, x, y, 0).apply {
             source = InputDevice.SOURCE_TOUCHSCREEN
         }
@@ -139,8 +142,8 @@ class VrUiHost(
         event.recycle()
     }
 
-    /** Подсветка элемента под взглядом, как наведение мыши. null — взгляд ушёл с панели. */
-    fun hover(x: Float?, y: Float?) {
+    /** Как наведение мыши. */
+    override fun hover(x: Float?, y: Float?) {
         val root = presentation?.window?.decorView ?: return
         val action = when {
             x == null || y == null -> if (hovering) MotionEvent.ACTION_HOVER_EXIT else return
@@ -158,16 +161,21 @@ class VrUiHost(
 
     /** Где сейчас живёт интерфейс: окно виртуального дисплея или слой на экране. */
     private fun root(): android.view.View? = when (place) {
-        Place.Vr -> presentation?.window?.decorView
-        Place.Screen -> composeView
-        Place.Hidden -> null
+        PanelPlace.Vr -> presentation?.window?.decorView
+        PanelPlace.Screen -> composeView
+        PanelPlace.Hidden -> null
     }
 
     /** Кнопки пульта: стрелки и OK двигают фокус по интерфейсу. */
     fun key(event: KeyEvent): Boolean = root()?.dispatchKeyEvent(event) ?: false
 
-    /** Прокрутка как колесом мыши в точке (x, y); [amount] > 0 — вверх. На экране — в центре. */
-    fun scroll(x: Float?, y: Float?, amount: Float) {
+    override fun pressKey(keyCode: Int) {
+        val now = SystemClock.uptimeMillis()
+        key(KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, 0))
+        key(KeyEvent(now, now, KeyEvent.ACTION_UP, keyCode, 0))
+    }
+
+    override fun scroll(x: Float?, y: Float?, amount: Float) {
         val root = root() ?: return
         val now = SystemClock.uptimeMillis()
         val properties = MotionEvent.PointerProperties().apply { id = 0; toolType = MotionEvent.TOOL_TYPE_MOUSE }

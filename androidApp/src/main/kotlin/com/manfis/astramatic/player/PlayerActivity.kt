@@ -87,6 +87,7 @@ class PlayerActivity : ComponentActivity() {
     private lateinit var cardboardView: CardboardView
     private lateinit var uiHost: VrUiHost
     private lateinit var modeButton: TextView
+    private lateinit var panels: PanelController
 
     private val menu = VrMenuState()
     private val handler = Handler(Looper.getMainLooper())
@@ -158,12 +159,12 @@ class PlayerActivity : ComponentActivity() {
                         player.play()
                     }
                     is AtEnd.OpenFile -> openPlaylist(list!!.copy(index = end.index))
-                    AtEnd.ShowControls -> showControls()
+                    AtEnd.ShowControls -> panels.showControls()
                 }
             }
 
             override fun onPlayerError(error: PlaybackException) {
-                showNotice(error.describe(), VrMenuState.Tab.Home)
+                panels.showNotice(error.describe(), VrMenuState.Tab.Home)
             }
         })
 
@@ -187,7 +188,7 @@ class PlayerActivity : ComponentActivity() {
             setStereoRenderMode(stereoMode)
             // Крестик SDK — выход из VR, как в других Cardboard-приложениях.
             setOnBackButtonClick { finish() }
-            setOnSettingsButtonClick { showMenu(VrMenuState.Tab.Headset) }
+            setOnSettingsButtonClick { panels.showMenu(VrMenuState.Tab.Headset) }
         }
         cardboardView.setOnTouchListener { _, event ->
             onScreenTouch(event)
@@ -223,13 +224,22 @@ class PlayerActivity : ComponentActivity() {
 
         menu.stereo = stereoMode
         uiHost = VrUiHost(this, screenOverlay) { VrMenu(menu, menuActions) }
+        panels = PanelController(
+            menu, settings, uiHost, renderer,
+            ticks = HandlerTicks(handler),
+            clock = SystemClock::uptimeMillis,
+            stereo = { stereoMode },
+            videoPlaying = { player.isPlaying && playlist?.current?.isImage != true },
+            exit = ::finish,
+            onShownChanged = ::updateModeButton,
+        )
         updateModeButton()
 
         lifecycleScope.launch {
-            snapshotFlow { menu.tab to menu.mode }.collect { updateCalibration() }
+            snapshotFlow { menu.tab to menu.mode }.collect { panels.updateCalibration() }
         }
         lifecycleScope.launch {
-            snapshotFlow { menu.sheet }.collect { updatePanelLayout() }
+            snapshotFlow { menu.sheet }.collect { panels.updateLayout() }
         }
         lifecycleScope.launch {
             snapshotFlow { menu.capturingKey }.collect {
@@ -240,10 +250,10 @@ class PlayerActivity : ComponentActivity() {
 
         // «Назад» ведёт к главной (файлам) и дальше неё не уходит: из VR выходят только крестиком, пальцем.
         // В 2D на главной «Назад» выходит, как в обычном приложении.
-        onBackPressedDispatcher.addCallback(this) { goBack() }
+        onBackPressedDispatcher.addCallback(this) { panels.goBack() }
 
         val pending = PendingPlaylist.take()
-        if (pending != null) openPlaylist(pending) else showMenu(VrMenuState.Tab.Home)
+        if (pending != null) openPlaylist(pending) else panels.showMenu(VrMenuState.Tab.Home)
     }
 
     private val menuActions = object : VrMenuActions {
@@ -314,8 +324,8 @@ class PlayerActivity : ComponentActivity() {
         // Только на потоке отрисовки: SDK пользуется параметрами шлема там же, и перечитывание
         // с главного потока роняло приложение посреди кадра.
         override fun headsetSaved() = cardboardView.queueEvent { cardboardView.loadDeviceParams() }
-        override fun openMenu(tab: VrMenuState.Tab) = showMenu(tab)
-        override fun hide() = hideMenu()
+        override fun openMenu(tab: VrMenuState.Tab) = panels.showMenu(tab)
+        override fun hide() = panels.hide()
         override fun exit() = finish()
     }
 
@@ -369,7 +379,7 @@ class PlayerActivity : ComponentActivity() {
         renderer.hasVideo = true
         if (fromMenu) renderer.centerOnPanel()
         menu.tab = VrMenuState.Tab.Home
-        hideMenu()
+        panels.hide()
     }
 
     private fun applyFormat(format: VideoFormat) {
@@ -422,7 +432,7 @@ class PlayerActivity : ComponentActivity() {
             val bitmap = (result as? SuccessResult)?.image?.toBitmap()
             if (bitmap == null) {
                 val reason = (result as? ErrorResult)?.throwable?.describe()
-                showNotice("Не удалось открыть фото${reason?.let { ": $it" } ?: "."}")
+                panels.showNotice("Не удалось открыть фото${reason?.let { ": $it" } ?: "."}")
                 return@launch
             }
             if (playlist?.current != item) return@launch
@@ -523,7 +533,7 @@ class PlayerActivity : ComponentActivity() {
         val host = Uri.parse(desktop.baseUrl).host
         val server = all.find { Uri.parse(it.baseUrl).host == host } ?: all.singleOrNull()
         if (server == null) {
-            showNotice("Подключите телефон к Darkframe: «+ Darkframe» на главном экране.")
+            panels.showNotice("Подключите телефон к Darkframe: «+ Darkframe» на главном экране.")
             return
         }
         val settingsRef = this
@@ -565,194 +575,13 @@ class PlayerActivity : ComponentActivity() {
         }
     }
 
-    // --- Меню -------------------------------------------------------------------------------
-
-    /** Большое меню: видео, файлы, шлем. */
-    private fun showMenu(tab: VrMenuState.Tab? = null) {
-        if (tab != null) menu.tab = tab
-        showPanel(VrMenuState.Mode.Menu)
-    }
-
-    /** Полоска управления воспроизведением. Без видео управлять нечем — тогда меню. */
-    private fun showControls() {
-        if (menu.title == null) showMenu(VrMenuState.Tab.Home) else showPanel(VrMenuState.Mode.Controls)
-    }
-
-    /** Какую часть виртуального дисплея и где показывает рендерер: меню, полоску или полоску с панелью. */
-    private fun updatePanelLayout() {
-        renderer.panelLayout = when {
-            menu.mode == VrMenuState.Mode.Menu -> PanelLayout.Menu
-            menu.sheet != null -> PanelLayout.ControlsSheet
-            else -> PanelLayout.Controls
-        }
-    }
-
-    private fun showPanel(mode: VrMenuState.Mode) {
-        menu.mode = mode
-        if (mode == VrMenuState.Mode.Menu) menu.sheet = null
-        autoHide.touch(SystemClock.uptimeMillis())
-        if (stereoMode) {
-            updatePanelLayout()
-            renderer.placePanelInFront()
-            renderer.panelVisible = true
-            uiHost.showInVr()
-            handler.removeCallbacks(hoverTick)
-            handler.post(hoverTick)
-        } else {
-            uiHost.showOnScreen()
-        }
-        updateCalibration()
-        updateModeButton()
-    }
-
-    /**
-     * «Назад» — шаг к главной: отмена назначения кнопки → из видео на главную → из настроек на главную →
-     * вверх по папкам. На главной в VR ничего не делает, в 2D выходит.
-     */
-    private fun goBack() {
-        val library = menu.library.backStack
-        when {
-            menu.capturingKey != null -> menu.capturingKey = null
-            uiHost.place == VrUiHost.Place.Hidden || menu.mode == VrMenuState.Mode.Controls -> showMenu(VrMenuState.Tab.Home)
-            menu.tab != VrMenuState.Tab.Home -> menu.tab = VrMenuState.Tab.Home
-            library.size > 1 -> library.removeAt(library.lastIndex)
-            !stereoMode -> finish()
-        }
-    }
-
-    /** Калибровочная комната вокруг — пока в шлеме открыта настройка шлема. */
-    private fun updateCalibration() {
-        renderer.calibration = stereoMode && uiHost.place == VrUiHost.Place.Vr &&
-            menu.mode == VrMenuState.Mode.Menu && menu.tab == VrMenuState.Tab.Headset
-    }
-
-    /** Сообщение приложения: в меню, где его видно и в шлеме, и на экране. */
-    private fun showNotice(text: String, tab: VrMenuState.Tab? = null) {
-        menu.notice = text
-        showMenu(tab)
-    }
-
-    private fun hideMenu() {
-        menu.notice = null
-        menu.sheet = null
-        grabbing = false
-        renderer.grab = Handle.None
-        handler.removeCallbacks(hoverTick)
-        uiHost.hover(null, null)
-        renderer.panelVisible = false
-        uiHost.hide()
-        updateCalibration()
-        updateModeButton()
-    }
-
-    /** Подсветка под взглядом, пока панель в шлеме. */
-    private val hoverTick = object : Runnable {
-        override fun run() {
-            if (uiHost.place != VrUiHost.Place.Vr) {
-                renderer.dwellProgress = 0f
-                return
-            }
-            val gaze = renderer.gaze
-            uiHost.hover(gaze?.x, gaze?.y)
-            updateDwell(gaze)
-            if (autoHideControls(gaze)) return
-            handler.postDelayed(this, HOVER_INTERVAL_MS)
-        }
-    }
-
-    private val autoHide = ControlsAutoHide()
-
-    /**
-     * Полоска сама уходит, если идёт видео, а смотрят не на неё: панель не раскрыта, ничего не держат.
-     * true — спрятали.
-     */
-    private fun autoHideControls(gaze: Gaze?): Boolean {
-        val unattended = menu.mode == VrMenuState.Mode.Controls && menu.sheet == null && !pressedOnPanel &&
-            !grabbing && gaze == null && player.isPlaying && playlist?.current?.isImage != true
-        if (!autoHide.shouldHide(SystemClock.uptimeMillis(), unattended)) return false
-        hideMenu()
-        return true
-    }
-
-    private val dwell = DwellClick()
-
-    private fun updateDwell(gaze: Gaze?) {
-        val enabled = settings.dwellClick && !pressedOnPanel
-        val state = dwell.update(gaze, enabled, settings.dwellMs, SystemClock.uptimeMillis())
-        renderer.dwellProgress = state.progress
-        state.click?.let {
-            uiHost.touch(MotionEvent.ACTION_DOWN, it.x, it.y)
-            uiHost.touch(MotionEvent.ACTION_UP, it.x, it.y)
-        }
-    }
-
     // --- Нажатие: кнопка Cardboard или действие «Нажатие» на пульте ------------------------
-
-    private var pressStart = 0L
-    private var pressedOnPanel = false
-
-    /** Держат уголок или полоску меню: нажатие не уходит в интерфейс. */
-    private var grabbing = false
-    private var lastGaze: Gaze? = null
-
-    /** Пока нажатие держат на панели, точка следует за взглядом: так прокручиваются списки и двигаются ползунки. */
-    private val dragTick = object : Runnable {
-        override fun run() {
-            if (!pressedOnPanel) return
-            renderer.gaze?.let {
-                lastGaze = it
-                uiHost.touch(MotionEvent.ACTION_MOVE, it.x, it.y)
-            }
-            handler.postDelayed(this, DRAG_INTERVAL_MS)
-        }
-    }
 
     private fun onScreenTouch(event: MotionEvent) {
         when (event.actionMasked) {
-            MotionEvent.ACTION_DOWN -> triggerDown(event.eventTime)
-            MotionEvent.ACTION_UP -> triggerUp(event.eventTime, cancelled = false)
-            MotionEvent.ACTION_CANCEL -> triggerUp(event.eventTime, cancelled = true)
-        }
-    }
-
-    private fun triggerDown(time: Long) {
-        pressStart = time
-        val handle = renderer.hoverHandle
-        if (uiHost.place == VrUiHost.Place.Vr && handle != Handle.None) {
-            grabbing = true
-            renderer.grab = handle
-            return
-        }
-        val gaze = renderer.gaze
-        if (uiHost.place == VrUiHost.Place.Vr && gaze != null) {
-            pressedOnPanel = true
-            lastGaze = gaze
-            uiHost.touch(MotionEvent.ACTION_DOWN, gaze.x, gaze.y)
-            handler.postDelayed(dragTick, DRAG_INTERVAL_MS)
-        }
-    }
-
-    private fun triggerUp(time: Long, cancelled: Boolean) {
-        if (grabbing) {
-            grabbing = false
-            renderer.grab = Handle.None
-            return
-        }
-        if (pressedOnPanel) {
-            pressedOnPanel = false
-            handler.removeCallbacks(dragTick)
-            val point = renderer.gaze ?: lastGaze ?: return
-            uiHost.touch(if (cancelled) MotionEvent.ACTION_CANCEL else MotionEvent.ACTION_UP, point.x, point.y)
-            return
-        }
-        if (cancelled) return
-        val longPress = time - pressStart >= LONG_PRESS_MS
-        when {
-            // Нажатие мимо панели закрывает меню, если есть что смотреть, иначе возвращает панель перед глаза.
-            uiHost.place == VrUiHost.Place.Vr -> if (menu.title != null) hideMenu() else renderer.placePanelInFront()
-            uiHost.place == VrUiHost.Place.Screen -> Unit
-            longPress -> renderer.recenter()
-            else -> showControls()
+            MotionEvent.ACTION_DOWN -> panels.triggerDown(event.eventTime)
+            MotionEvent.ACTION_UP -> panels.triggerUp(event.eventTime, cancelled = false)
+            MotionEvent.ACTION_CANCEL -> panels.triggerUp(event.eventTime, cancelled = true)
         }
     }
 
@@ -778,8 +607,8 @@ class PlayerActivity : ComponentActivity() {
         val action = settings.keys.actionFor(event.keyCode)
         if (action != null) {
             if (action == RemoteAction.Click) {
-                if (down && event.repeatCount == 0) triggerDown(event.eventTime)
-                if (!down) triggerUp(event.eventTime, cancelled = false)
+                if (down && event.repeatCount == 0) panels.triggerDown(event.eventTime)
+                if (!down) panels.triggerUp(event.eventTime, cancelled = false)
             } else if (down && (event.repeatCount == 0 || action in REPEATABLE)) {
                 perform(action)
             }
@@ -787,7 +616,7 @@ class PlayerActivity : ComponentActivity() {
         }
 
         // Не назначенные стрелки и OK ходят по меню в шлеме (на экране — сами, как обычно).
-        if (uiHost.place == VrUiHost.Place.Vr) {
+        if (uiHost.place == PanelPlace.Vr) {
             val forwarded = when (event.keyCode) {
                 KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN,
                 KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
@@ -816,11 +645,7 @@ class PlayerActivity : ComponentActivity() {
         when (action) {
             RemoteAction.Click -> Unit
             RemoteAction.Back -> onBackPressedDispatcher.onBackPressed()
-            RemoteAction.Controls -> when {
-                uiHost.place == VrUiHost.Place.Hidden -> showControls()
-                menu.mode == VrMenuState.Mode.Controls -> showMenu(VrMenuState.Tab.Home)
-                menu.title != null -> hideMenu()
-            }
+            RemoteAction.Controls -> panels.cycleControls()
             RemoteAction.PlayPause -> togglePlayback()
             RemoteAction.SeekBack -> menuActions.seekBy(-SEEK_STEP_MS)
             RemoteAction.SeekForward -> menuActions.seekBy(SEEK_STEP_MS)
@@ -833,13 +658,13 @@ class PlayerActivity : ComponentActivity() {
             RemoteAction.Recenter -> renderer.recenter()
             RemoteAction.ZoomIn -> menuActions.setZoom(menu.zoom * 1.15f)
             RemoteAction.ZoomOut -> menuActions.setZoom(menu.zoom / 1.15f)
-            RemoteAction.NavUp -> navKey(KeyEvent.KEYCODE_DPAD_UP)
-            RemoteAction.NavDown -> navKey(KeyEvent.KEYCODE_DPAD_DOWN)
-            RemoteAction.NavLeft -> navKey(KeyEvent.KEYCODE_DPAD_LEFT)
-            RemoteAction.NavRight -> navKey(KeyEvent.KEYCODE_DPAD_RIGHT)
-            RemoteAction.NavSelect -> navKey(KeyEvent.KEYCODE_DPAD_CENTER)
-            RemoteAction.ScrollUp -> scrollMenu(SCROLL_STEP)
-            RemoteAction.ScrollDown -> scrollMenu(-SCROLL_STEP)
+            RemoteAction.NavUp -> panels.navKey(KeyEvent.KEYCODE_DPAD_UP)
+            RemoteAction.NavDown -> panels.navKey(KeyEvent.KEYCODE_DPAD_DOWN)
+            RemoteAction.NavLeft -> panels.navKey(KeyEvent.KEYCODE_DPAD_LEFT)
+            RemoteAction.NavRight -> panels.navKey(KeyEvent.KEYCODE_DPAD_RIGHT)
+            RemoteAction.NavSelect -> panels.navKey(KeyEvent.KEYCODE_DPAD_CENTER)
+            RemoteAction.ScrollUp -> panels.scroll(SCROLL_STEP)
+            RemoteAction.ScrollDown -> panels.scroll(-SCROLL_STEP)
             RemoteAction.AxisScroll, RemoteAction.AxisSeek, RemoteAction.AxisZoom,
             RemoteAction.AxisNavHorizontal, RemoteAction.AxisNavVertical -> Unit
         }
@@ -848,21 +673,6 @@ class PlayerActivity : ComponentActivity() {
     /** Громкость без системной плашки: в шлеме её всё равно не видно. */
     private fun volume(direction: Int) {
         getSystemService(AudioManager::class.java).adjustStreamVolume(AudioManager.STREAM_MUSIC, direction, 0)
-    }
-
-    /** Стрелка или OK — в интерфейс меню, мимо назначений пульта. */
-    private fun navKey(keyCode: Int) {
-        if (uiHost.place == VrUiHost.Place.Hidden) return
-        val now = SystemClock.uptimeMillis()
-        uiHost.key(KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, 0))
-        uiHost.key(KeyEvent(now, now, KeyEvent.ACTION_UP, keyCode, 0))
-    }
-
-    /** [amount] > 0 — вверх. В шлеме — там, куда смотрят, на экране — в центре. */
-    private fun scrollMenu(amount: Float) {
-        if (uiHost.place == VrUiHost.Place.Hidden) return
-        val gaze = if (uiHost.place == VrUiHost.Place.Vr) renderer.gaze else null
-        uiHost.scroll(gaze?.x, gaze?.y, amount)
     }
 
     // --- Пульт и геймпад: оси и колесо мыши ------------------------------------------------
@@ -884,8 +694,8 @@ class PlayerActivity : ComponentActivity() {
 
     override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
         // Колесо мыши (пульты в режиме мыши): прокрутка меню в шлеме. На экране меню прокручивается само.
-        if (event.actionMasked == MotionEvent.ACTION_SCROLL && uiHost.place == VrUiHost.Place.Vr) {
-            scrollMenu(event.getAxisValue(MotionEvent.AXIS_VSCROLL))
+        if (event.actionMasked == MotionEvent.ACTION_SCROLL && uiHost.place == PanelPlace.Vr) {
+            panels.scroll(event.getAxisValue(MotionEvent.AXIS_VSCROLL))
             return true
         }
         if (!event.isFromSource(InputDevice.SOURCE_JOYSTICK) || event.action != MotionEvent.ACTION_MOVE) {
@@ -944,7 +754,7 @@ class PlayerActivity : ComponentActivity() {
     /** Отклонение для осевого действия: самая сильная из назначенных на него осей. */
     private fun axisValue(action: RemoteAction): Float {
         // Ось, назначенная и на меню, и на просмотр: работает то, что сейчас на экране.
-        val menuOpen = uiHost.place != VrUiHost.Place.Hidden
+        val menuOpen = uiHost.place != PanelPlace.Hidden
         val active = when (action.axisContext) {
             AxisContext.Menu -> menuOpen
             AxisContext.Viewing -> !menuOpen
@@ -977,12 +787,12 @@ class PlayerActivity : ComponentActivity() {
         val x = direction(axisValue(RemoteAction.AxisNavHorizontal))
         if (x != navX) {
             navX = x
-            if (x != 0) navKey(if (x < 0) KeyEvent.KEYCODE_DPAD_LEFT else KeyEvent.KEYCODE_DPAD_RIGHT)
+            if (x != 0) panels.navKey(if (x < 0) KeyEvent.KEYCODE_DPAD_LEFT else KeyEvent.KEYCODE_DPAD_RIGHT)
         }
         val y = direction(axisValue(RemoteAction.AxisNavVertical))
         if (y != navY) {
             navY = y
-            if (y != 0) navKey(if (y < 0) KeyEvent.KEYCODE_DPAD_UP else KeyEvent.KEYCODE_DPAD_DOWN)
+            if (y != 0) panels.navKey(if (y < 0) KeyEvent.KEYCODE_DPAD_UP else KeyEvent.KEYCODE_DPAD_DOWN)
         }
         // Прокрутка и перемотка — плавно, пока ось отклонена.
         handler.removeCallbacks(axisTick)
@@ -994,7 +804,7 @@ class PlayerActivity : ComponentActivity() {
     private fun axisButton(action: RemoteAction, down: Boolean) {
         val now = SystemClock.uptimeMillis()
         if (action == RemoteAction.Click) {
-            if (down) triggerDown(now) else triggerUp(now, cancelled = false)
+            if (down) panels.triggerDown(now) else panels.triggerUp(now, cancelled = false)
         } else if (down) {
             perform(action)
         }
@@ -1014,7 +824,7 @@ class PlayerActivity : ComponentActivity() {
             // Вверх по стику (назначен «вверх») — приблизить, плавно, примерно вдвое за секунду.
             if (abs(zoom) > DEAD_ZONE) menuActions.setZoom(menu.zoom * (1f + zoom * AXIS_ZOOM_PER_TICK))
             // Стик вниз (плюс) прокручивает вниз — как колесо от себя.
-            if (abs(scroll) > DEAD_ZONE) scrollMenu(-scroll * AXIS_SCROLL_PER_TICK)
+            if (abs(scroll) > DEAD_ZONE) panels.scroll(-scroll * AXIS_SCROLL_PER_TICK)
             if (abs(seek) > DEAD_ZONE) menuActions.seekBy((seek * AXIS_SEEK_MS_PER_TICK).toLong())
             if (abs(scroll) > DEAD_ZONE || abs(seek) > DEAD_ZONE || abs(zoom) > DEAD_ZONE) handler.postDelayed(this, AXIS_TICK_MS)
         }
@@ -1026,20 +836,13 @@ class PlayerActivity : ComponentActivity() {
         stereoMode = !stereoMode
         menu.stereo = stereoMode
         cardboardView.setStereoRenderMode(stereoMode)
-        if (uiHost.place != VrUiHost.Place.Hidden) {
-            if (!stereoMode) {
-                renderer.panelVisible = false
-                handler.removeCallbacks(hoverTick)
-            }
-            showPanel(menu.mode)
-        }
-        updateModeButton()
+        panels.stereoChanged()
     }
 
     /** Подпись — режим, в который кнопка переключит. На плоском меню у неё есть своя кнопка. */
     private fun updateModeButton() {
         modeButton.text = if (stereoMode) "2D" else "VR"
-        modeButton.visibility = if (uiHost.place == VrUiHost.Place.Screen) View.GONE else View.VISIBLE
+        modeButton.visibility = if (uiHost.place == PanelPlace.Screen) View.GONE else View.VISIBLE
     }
 
     private fun togglePlayback() {
@@ -1097,9 +900,6 @@ class PlayerActivity : ComponentActivity() {
 
         private const val SEEK_STEP_MS = 10_000L
         private const val LONG_SEEK_STEP_MS = 30_000L
-        private const val LONG_PRESS_MS = 500L
-        private const val DRAG_INTERVAL_MS = 16L
-        private const val HOVER_INTERVAL_MS = 50L
         private const val KEY_STEREO = "stereo"
         private const val SCROLL_STEP = 1f
         private const val DEAD_ZONE = 0.2f
