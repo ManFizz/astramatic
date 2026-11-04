@@ -107,9 +107,8 @@ class PanelControllerTest {
         assertEquals(0, exits)
     }
 
-    /** Текущее поведение; вопрос пользователю ещё не закрыт. */
     @Test
-    fun `NAV-04 back with an open sheet goes straight home`() {
+    fun `NAV-04 back with an open sheet closes it and keeps the controls`() {
         videoOpen()
         panels.showControls()
         menu.sheet = VrMenuState.Sheet.Queue
@@ -118,8 +117,36 @@ class PanelControllerTest {
 
         panels.goBack()
 
-        assertMenuOnHome()
         assertNull(menu.sheet)
+        assertEquals(VrMenuState.Mode.Controls, menu.mode)
+        assertEquals(PanelPlace.Vr, host.place)
+        panels.updateLayout()
+        assertEquals(PanelLayout.Controls, scene.panelLayout)
+    }
+
+    @Test
+    fun `NAV-04 next back after closing the sheet opens home`() {
+        videoOpen()
+        panels.showControls()
+        menu.sheet = VrMenuState.Sheet.View
+
+        panels.goBack()
+        panels.goBack()
+
+        assertMenuOnHome()
+    }
+
+    @Test
+    fun `NAV-04 key capture is cancelled before the sheet is closed`() {
+        videoOpen()
+        panels.showControls()
+        menu.sheet = VrMenuState.Sheet.View
+        menu.capturingKey = RemoteAction.Recenter
+
+        panels.goBack()
+
+        assertNull(menu.capturingKey)
+        assertEquals(VrMenuState.Sheet.View, menu.sheet)
     }
 
     @Test

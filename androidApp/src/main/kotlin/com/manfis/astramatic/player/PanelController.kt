@@ -61,6 +61,7 @@ class PanelController(
         val library = menu.library.backStack
         when {
             menu.capturingKey != null -> menu.capturingKey = null
+            menu.sheet != null -> menu.sheet = null
             host.place == PanelPlace.Hidden || menu.mode == VrMenuState.Mode.Controls -> showMenu(VrMenuState.Tab.Home)
             menu.tab != VrMenuState.Tab.Home -> menu.tab = VrMenuState.Tab.Home
             library.size > 1 -> library.removeAt(library.lastIndex)
