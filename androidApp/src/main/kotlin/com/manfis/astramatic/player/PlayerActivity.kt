@@ -75,7 +75,6 @@ import com.manfis.astramatic.remote.VideoFiles
 import com.manfis.astramatic.remote.RemoteCommand
 import com.manfis.astramatic.ui.DefaultFormat
 import kotlin.math.abs
-import kotlin.random.Random
 import com.manfis.astramatic.settings.RepeatMode
 
 /**
@@ -153,14 +152,15 @@ class PlayerActivity : ComponentActivity() {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 if (playbackState != Player.STATE_ENDED || playlist?.current?.isImage == true) return
                 savePosition()
-                if (repeatMode == RepeatMode.One) {
-                    player.seekTo(0)
-                    player.play()
-                    return
+                val list = playlist
+                when (val end = PlayQueue.atEnd(list?.index ?: 0, list?.items?.size ?: 0, queueModes)) {
+                    AtEnd.RestartFile -> {
+                        player.seekTo(0)
+                        player.play()
+                    }
+                    is AtEnd.OpenFile -> openPlaylist(list!!.copy(index = end.index))
+                    AtEnd.ShowControls -> showControls()
                 }
-                val next = playlist?.let { step(it, 1) }
-                val auto = settings.autoplayNext || repeatMode == RepeatMode.All || settings.shuffle
-                if (auto && next != null) openPlaylist(next) else showControls()
             }
 
             override fun onPlayerError(error: PlaybackException) {
@@ -293,7 +293,7 @@ class PlayerActivity : ComponentActivity() {
         override fun nextFile() { playlist?.let { step(it, 1) }?.let(::openPlaylist) }
 
         override fun cycleRepeat() {
-            settings.repeatMode = RepeatMode.entries[(repeatMode.ordinal + 1) % RepeatMode.entries.size].name
+            settings.repeatMode = PlayQueue.nextRepeat(repeatMode).name
             updateNavigation()
         }
 
@@ -304,7 +304,7 @@ class PlayerActivity : ComponentActivity() {
 
         override fun playQueueItem(index: Int) {
             val list = playlist ?: return
-            if (index in list.items.indices && index != list.index) openPlaylist(list.copy(index = index))
+            PlayQueue.queueTarget(index, list.items.size, list.index)?.let { openPlaylist(list.copy(index = it)) }
         }
 
         override fun toggleSlideshow() {
@@ -322,20 +322,10 @@ class PlayerActivity : ComponentActivity() {
 
     private val repeatMode get() = RepeatMode.entries.find { it.name == settings.repeatMode } ?: RepeatMode.Off
 
-    /**
-     * Соседний файл с учётом режимов: случайный — любой другой, «повтор папки» — по кругу.
-     * null — дальше некуда.
-     */
-    private fun step(list: Playlist, delta: Int): Playlist? {
-        val size = list.items.size
-        if (settings.shuffle && size > 1) {
-            val other = Random.nextInt(size - 1)
-            return list.copy(index = if (other >= list.index) other + 1 else other)
-        }
-        list.moved(delta)?.let { return it }
-        if (repeatMode != RepeatMode.All || size < 2) return null
-        return list.copy(index = if (delta > 0) 0 else list.items.lastIndex)
-    }
+    private val queueModes get() = QueueModes(settings.shuffle, repeatMode, settings.autoplayNext)
+
+    private fun step(list: Playlist, delta: Int): Playlist? =
+        PlayQueue.neighbor(list.index, list.items.size, delta, queueModes)?.let { list.copy(index = it) }
 
     private fun updateNavigation() {
         val list = playlist ?: return
