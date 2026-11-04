@@ -186,6 +186,7 @@ class PlayerActivity : ComponentActivity() {
             volume = ::changeVolume,
         )
         updateModeButton()
+        DebugCommands.install(this, renderer, uiHost, menu, settings)
 
         lifecycleScope.launch {
             snapshotFlow { menu.tab to menu.mode }.collect { panels.updateCalibration() }

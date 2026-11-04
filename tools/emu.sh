@@ -7,7 +7,14 @@
 #   tools/emu.sh shot имя.png     снять экран вместе с GL-картинкой
 #   tools/emu.sh key BACK         нажать кнопку: BACK, DPAD_DOWN, DPAD_CENTER…
 #   tools/emu.sh tap              нажать кнопку шлема (касание экрана)
+#   tools/emu.sh reset            стереть данные приложения в эмуляторе: настройки, размер меню
 #   tools/emu.sh look X Y СЕКУНД  поворот головы: X — влево-вправо, Y — вверх-вниз, рад/с. Тайминг приблизительный
+#   tools/emu.sh aim PX PY        точно навести взгляд на точку панели, пиксели дисплея 1280×800; за краем — меньше 0 или больше размера
+#   tools/emu.sh angle YAW PITCH  точно задать взгляд в градусах: YAW — влево, PITCH — вверх
+#   tools/emu.sh free             вернуть взгляд трекингу
+#   tools/emu.sh press            нажать кнопку шлема и держать
+#   tools/emu.sh release          отпустить
+#   tools/emu.sh state            состояние плеера одной строкой: панель, взгляд, уголок, размер меню
 #   tools/emu.sh errors           падения приложения в журнале
 #   tools/emu.sh stop             выключить эмулятор
 set -u
@@ -44,6 +51,12 @@ wait_for() { # описание, предел в секундах, команд�
 
 booted() { [ "$(a shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; }
 in_player() { a shell dumpsys activity activities | grep -q "topResumedActivity.*PlayerActivity"; }
+
+# Отладочная команда плеера (DebugCommands, только debug-сборка). В ответ — состояние плеера.
+command() {
+    a shell am broadcast -a com.manfis.astramatic.debug.COMMAND -p "$PACKAGE" "$@" |
+        tr -d '\r' | sed -n 's/.*data="\(.*\)"$/\1/p'
+}
 
 # Координаты кнопки главного экрана из дерева интерфейса; сам экран перестраивается по мере загрузки.
 button_center() {
@@ -103,6 +116,27 @@ look)
     sleep "${4:?секунды}"
     a emu sensor set gyroscope-uncalibrated 0:0:0 >/dev/null
     ;;
+reset)
+    a shell pm clear "$PACKAGE"
+    ;;
+aim)
+    command --es cmd aim --ef px "${2:?PX}" --ef py "${3:?PY}"
+    ;;
+angle)
+    command --es cmd angle --ef yaw "${2:?YAW}" --ef pitch "${3:?PITCH}"
+    ;;
+free)
+    command --es cmd free
+    ;;
+press)
+    a shell input motionevent DOWN 1000 500 >/dev/null
+    ;;
+release)
+    a shell input motionevent UP 1000 500 >/dev/null
+    ;;
+state)
+    command --es cmd state
+    ;;
 errors)
     a logcat -d | grep -E "FATAL EXCEPTION|E AndroidRuntime|UnsatisfiedLinkError" || echo "Падений нет"
     ;;
@@ -110,7 +144,7 @@ stop)
     a emu kill
     ;;
 *)
-    sed -n '2,12p' "$0"
+    sed -n '2,19p' "$0"
     exit 2
     ;;
 esac

@@ -240,6 +240,14 @@ class PanelTracker(
         return worldYaw to worldPitch
     }
 
+    /** Что сейчас под взглядом и где панель: для проверок в эмуляторе. */
+    fun describe(): String = "visible=$panelVisible settling=$settling layout=$layout" +
+        " gaze=${gaze?.let { "${it.x.toInt()},${it.y.toInt()}" }} handle=$hoverHandle active=$activeHandle" +
+        " size=${"%.3f".format(java.util.Locale.ROOT, if (layout == PanelLayout.Menu) panelW / (layout.width * panelScale) else 1f)}" +
+        " panelYaw=${"%.1f".format(java.util.Locale.ROOT, panelYawDeg)}" +
+        " panelPitch=${"%.1f".format(java.util.Locale.ROOT, panelPitchDeg)}" +
+        " videoYaw=${"%.1f".format(java.util.Locale.ROOT, videoYawDeg)}"
+
     /** Размер меню (множитель к обычному): во время растягивания — живой, иначе из настроек. */
     private fun menuSize(): Float {
         val saved = prefs.menuSize.coerceIn(MIN_MENU_SIZE, MAX_MENU_SIZE)

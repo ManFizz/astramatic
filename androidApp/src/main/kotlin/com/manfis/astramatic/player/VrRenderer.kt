@@ -8,6 +8,7 @@ import android.view.Surface
 import com.google.cardboard.sdk.CardboardView
 import com.google.cardboard.sdk.HeadTransform
 import com.google.cardboard.sdk.Viewport
+import com.manfis.astramatic.BuildConfig
 import com.manfis.astramatic.model.Projection
 import com.manfis.astramatic.model.StereoLayout
 import com.manfis.astramatic.model.VideoFormat
@@ -73,6 +74,9 @@ class VrRenderer(
 
     /** Взялись (из UI-потока): что держат; [Handle.None] — отпустили. */
     override var grab by tracker::grab
+
+    /** Сколько раз просили рецентр: видно в отладочной команде. */
+    @Volatile private var recenterCount = 0
 
     /** Заполнение кольца вокруг курсора при нажатии взглядом, 0..1. */
     @Volatile override var dwellProgress = 0f
@@ -168,7 +172,10 @@ class VrRenderer(
      * Повернуть видео так, чтобы его центр оказался там, куда сейчас смотрит голова:
      * по горизонтали, а в режиме «лёжа» — и по вертикали.
      */
-    override fun recenter() = tracker.recenter()
+    override fun recenter() {
+        recenterCount++
+        tracker.recenter()
+    }
 
     /** Повернуть видео к панели: файл выбран в меню — пусть начнётся там, где меню. */
     override fun centerOnPanel() = tracker.centerOnPanel()
@@ -215,7 +222,7 @@ class VrRenderer(
         panel.update()
 
         headTransform.getHeadView(headView, 0)
-        correctDrift()
+        if (!(BuildConfig.DEBUG && applyDebugLook())) correctDrift()
         // Направление взгляда в мире: третья строка матрицы вида со знаком минус.
         tracker.update(-headView[2], -headView[6], -headView[10])
 
@@ -250,6 +257,27 @@ class VrRenderer(
     }
 
     private fun ease(t: Float): Float = 1f - (1f - t) * (1f - t) * (1f - t)
+
+    /** Взгляд, заданный командой, вместо трекинга: без него в эмуляторе нельзя точно навести. Только debug. */
+    @Volatile var debugLook: DebugLook? = null
+
+    /** true — вид головы задан командой, поправка по компасу не нужна. */
+    private fun applyDebugLook(): Boolean {
+        val look = when (val requested = debugLook ?: return false) {
+            is DebugLook.Angles -> requested
+            // Точка панели переводится в углы один раз: сама панель потом может сдвинуться или вырасти.
+            is DebugLook.PanelPoint -> tracker.anglesForPanelPoint(requested.x, requested.y)
+                .let { (yaw, pitch) -> DebugLook.Angles(yaw, pitch) }
+                .also { debugLook = it }
+        }
+        // Вид — обратный поворот головы: сначала рысканье назад, потом наклон.
+        Matrix.setRotateM(headView, 0, -look.pitchDeg, 1f, 0f, 0f)
+        Matrix.rotateM(headView, 0, -look.yawDeg, 0f, 1f, 0f)
+        return true
+    }
+
+    /** Состояние для отладочной команды. */
+    fun debugState(): String = tracker.describe() + " recenters=$recenterCount"
 
     /**
      * Гироскоп со временем уводит поворот в сторону — поворачиваем мир обратно на оценку ухода по компасу.
@@ -619,4 +647,12 @@ void main() {
 }
 """
     }
+}
+
+/** Куда смотреть по отладочной команде. */
+sealed interface DebugLook {
+    data class Angles(val yawDeg: Float, val pitchDeg: Float) : DebugLook
+
+    /** Точка панели в пикселях дисплея; за краями панели значения отрицательные или больше её размера. */
+    data class PanelPoint(val x: Float, val y: Float) : DebugLook
 }
