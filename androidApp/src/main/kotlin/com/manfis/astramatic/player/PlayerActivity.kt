@@ -54,9 +54,6 @@ import coil3.toBitmap
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import com.manfis.astramatic.settings.AppSettings
-import com.manfis.astramatic.settings.RemoteAction
-import com.manfis.astramatic.settings.AxisBinding
-import com.manfis.astramatic.settings.AxisContext
 import com.manfis.astramatic.settings.KeyBindings
 import android.media.AudioManager
 import com.manfis.astramatic.library.DarkframeClient
@@ -73,7 +70,6 @@ import com.manfis.astramatic.remote.PlayerStatus
 import com.manfis.astramatic.remote.VideoFiles
 import com.manfis.astramatic.remote.RemoteCommand
 import com.manfis.astramatic.ui.DefaultFormat
-import kotlin.math.abs
 import com.manfis.astramatic.settings.RepeatMode
 
 /**
@@ -88,6 +84,7 @@ class PlayerActivity : ComponentActivity() {
     private lateinit var uiHost: VrUiHost
     private lateinit var modeButton: TextView
     private lateinit var panels: PanelController
+    private lateinit var input: RemoteInput
 
     private val menu = VrMenuState()
     private val handler = Handler(Looper.getMainLooper())
@@ -233,6 +230,13 @@ class PlayerActivity : ComponentActivity() {
             exit = ::finish,
             onShownChanged = ::updateModeButton,
         )
+        input = RemoteInput(
+            menu, settings.keys, uiHost, panels, menuActions,
+            ticks = HandlerTicks(handler),
+            clock = SystemClock::uptimeMillis,
+            systemBack = { onBackPressedDispatcher.onBackPressed() },
+            volume = ::changeVolume,
+        )
         updateModeButton()
 
         lifecycleScope.launch {
@@ -242,10 +246,7 @@ class PlayerActivity : ComponentActivity() {
             snapshotFlow { menu.sheet }.collect { panels.updateLayout() }
         }
         lifecycleScope.launch {
-            snapshotFlow { menu.capturingKey }.collect {
-                captureStartedAt = SystemClock.uptimeMillis()
-                captureBaseline = null
-            }
+            snapshotFlow { menu.capturingKey }.collect { input.captureChanged() }
         }
 
         // «Назад» ведёт к главной (файлам) и дальше неё не уходит: из VR выходят только крестиком, пальцем.
@@ -593,45 +594,19 @@ class PlayerActivity : ComponentActivity() {
             menu.lastKey = "${KeyBindings.keyName(event.keyCode)} · ${event.device?.name ?: "?"}"
         }
 
-        // Назначение кнопки: следующая нажатая кнопка (кроме системной «Назад») достаётся выбранному действию.
-        val capturing = menu.capturingKey
-        if (capturing != null && !capturing.isAxis && event.keyCode != KeyEvent.KEYCODE_BACK) {
-            if (down && event.repeatCount == 0) {
-                settings.keys.assignKey(capturing, event.keyCode)
-                menu.capturingKey = null
-            }
-            return true
-        }
-
-        // Назначения пульта важнее всего остального.
-        val action = settings.keys.actionFor(event.keyCode)
-        if (action != null) {
-            if (action == RemoteAction.Click) {
-                if (down && event.repeatCount == 0) panels.triggerDown(event.eventTime)
-                if (!down) panels.triggerUp(event.eventTime, cancelled = false)
-            } else if (down && (event.repeatCount == 0 || action in REPEATABLE)) {
-                perform(action)
-            }
-            return true
-        }
-
-        // Не назначенные стрелки и OK ходят по меню в шлеме (на экране — сами, как обычно).
-        if (uiHost.place == PanelPlace.Vr) {
-            val forwarded = when (event.keyCode) {
-                KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN,
-                KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
-                KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_TAB -> event
-                KeyEvent.KEYCODE_BUTTON_A -> KeyEvent(
-                    event.downTime, event.eventTime, event.action, KeyEvent.KEYCODE_DPAD_CENTER, event.repeatCount,
-                )
-                else -> null
-            }
-            if (forwarded != null) {
+        return when (val route = input.onKey(event.keyCode, down, event.repeatCount, event.eventTime)) {
+            KeyRoute.Consumed -> true
+            is KeyRoute.ToPanel -> {
+                val forwarded = if (route.keyCode == event.keyCode) {
+                    event
+                } else {
+                    KeyEvent(event.downTime, event.eventTime, event.action, route.keyCode, event.repeatCount)
+                }
                 uiHost.key(forwarded)
-                return true
+                true
             }
+            KeyRoute.System -> super.dispatchKeyEvent(event)
         }
-        return super.dispatchKeyEvent(event)
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean = when (keyCode) {
@@ -641,193 +616,30 @@ class PlayerActivity : ComponentActivity() {
         else -> super.onKeyDown(keyCode, event)
     }
 
-    private fun perform(action: RemoteAction) {
-        when (action) {
-            RemoteAction.Click -> Unit
-            RemoteAction.Back -> onBackPressedDispatcher.onBackPressed()
-            RemoteAction.Controls -> panels.cycleControls()
-            RemoteAction.PlayPause -> togglePlayback()
-            RemoteAction.SeekBack -> menuActions.seekBy(-SEEK_STEP_MS)
-            RemoteAction.SeekForward -> menuActions.seekBy(SEEK_STEP_MS)
-            RemoteAction.SeekBackLong -> menuActions.seekBy(-LONG_SEEK_STEP_MS)
-            RemoteAction.SeekForwardLong -> menuActions.seekBy(LONG_SEEK_STEP_MS)
-            RemoteAction.PreviousFile -> menuActions.previousFile()
-            RemoteAction.NextFile -> menuActions.nextFile()
-            RemoteAction.VolumeUp -> volume(AudioManager.ADJUST_RAISE)
-            RemoteAction.VolumeDown -> volume(AudioManager.ADJUST_LOWER)
-            RemoteAction.Recenter -> renderer.recenter()
-            RemoteAction.ZoomIn -> menuActions.setZoom(menu.zoom * 1.15f)
-            RemoteAction.ZoomOut -> menuActions.setZoom(menu.zoom / 1.15f)
-            RemoteAction.NavUp -> panels.navKey(KeyEvent.KEYCODE_DPAD_UP)
-            RemoteAction.NavDown -> panels.navKey(KeyEvent.KEYCODE_DPAD_DOWN)
-            RemoteAction.NavLeft -> panels.navKey(KeyEvent.KEYCODE_DPAD_LEFT)
-            RemoteAction.NavRight -> panels.navKey(KeyEvent.KEYCODE_DPAD_RIGHT)
-            RemoteAction.NavSelect -> panels.navKey(KeyEvent.KEYCODE_DPAD_CENTER)
-            RemoteAction.ScrollUp -> panels.scroll(SCROLL_STEP)
-            RemoteAction.ScrollDown -> panels.scroll(-SCROLL_STEP)
-            RemoteAction.AxisScroll, RemoteAction.AxisSeek, RemoteAction.AxisZoom,
-            RemoteAction.AxisNavHorizontal, RemoteAction.AxisNavVertical -> Unit
-        }
-    }
-
     /** Громкость без системной плашки: в шлеме её всё равно не видно. */
-    private fun volume(direction: Int) {
+    private fun changeVolume(louder: Boolean) {
+        val direction = if (louder) AudioManager.ADJUST_RAISE else AudioManager.ADJUST_LOWER
         getSystemService(AudioManager::class.java).adjustStreamVolume(AudioManager.STREAM_MUSIC, direction, 0)
     }
 
     // --- Пульт и геймпад: оси и колесо мыши ------------------------------------------------
 
-    /** Последние значения осей. Геймпад присылает события только при движении — поэтому храним. */
-    private val axisValues = HashMap<Int, Float>()
-
-    /** Положение покоя на момент начала назначения: снимок до первого движения. */
-    private var captureBaseline: Map<Int, Float>? = null
-
-    /** Когда началось назначение (uptime, мс). */
-    private var captureStartedAt = 0L
-
-    /** Оси, нажатые как кнопки; только что назначенные не срабатывают, пока их не отпустят. */
-    private val axisPressed = HashSet<AxisBinding>()
-    private val axisSuppressed = HashSet<AxisBinding>()
-    private var navX = 0
-    private var navY = 0
-
     override fun dispatchGenericMotionEvent(event: MotionEvent): Boolean {
-        // Колесо мыши (пульты в режиме мыши): прокрутка меню в шлеме. На экране меню прокручивается само.
-        if (event.actionMasked == MotionEvent.ACTION_SCROLL && uiHost.place == PanelPlace.Vr) {
-            panels.scroll(event.getAxisValue(MotionEvent.AXIS_VSCROLL))
+        if (event.actionMasked == MotionEvent.ACTION_SCROLL && input.onWheel(event.getAxisValue(MotionEvent.AXIS_VSCROLL))) {
             return true
         }
         if (!event.isFromSource(InputDevice.SOURCE_JOYSTICK) || event.action != MotionEvent.ACTION_MOVE) {
             return super.dispatchGenericMotionEvent(event)
         }
-
-        val ranges = event.device?.motionRanges.orEmpty().filter { it.isFromSource(InputDevice.SOURCE_JOYSTICK) }
-        // Покой оси, которая ещё не двигалась: у курков (0..1) — 0, у стиков (−1..1) — середина.
-        val rest = ranges.associate { it.axis to (axisValues[it.axis] ?: if (it.min >= -0.01f) it.min else 0f) }
-        val values = ranges.associate { it.axis to event.getAxisValue(it.axis) }
-
-        val strongest = values.maxByOrNull { abs(it.value - (rest[it.key] ?: 0f)) }
-        if (strongest != null && abs(strongest.value - (rest[strongest.key] ?: 0f)) > 0.5f) {
-            menu.lastKey = "${MotionEvent.axisToString(strongest.key).removePrefix("AXIS_")} " +
-                "${"%+.1f".format(strongest.value)} · ${event.device?.name ?: "?"}"
+        val motion = event.device?.motionRanges.orEmpty().filter { it.isFromSource(InputDevice.SOURCE_JOYSTICK) }
+        val ranges = motion.map { AxisRange(it.axis, it.min) }
+        val values = motion.associate { it.axis to event.getAxisValue(it.axis) }
+        input.strongestAxis(ranges, values)?.let { (axis, value) ->
+            menu.lastKey = "${MotionEvent.axisToString(axis).removePrefix("AXIS_")} " +
+                "${"%+.1f".format(value)} · ${event.device?.name ?: "?"}"
         }
-
-        val capturing = menu.capturingKey
-        if (capturing != null) {
-            // Курок или стик, которым только что нажали «+», ещё возвращается в покой — это не назначение:
-            // первые мгновения просто запоминаем, где оси остановились.
-            if (event.eventTime - captureStartedAt < CAPTURE_SETTLE_MS) {
-                axisValues.putAll(values)
-                captureBaseline = values
-                return true
-            }
-            val baseline = captureBaseline ?: rest.also { captureBaseline = it }
-            axisValues.putAll(values)
-            val moved = values.maxByOrNull { abs(it.value - (baseline[it.key] ?: 0f)) } ?: return true
-            val delta = moved.value - (baseline[moved.key] ?: 0f)
-            if (abs(delta) > CAPTURE_THRESHOLD) {
-                val restValue = baseline[moved.key] ?: 0f
-                val binding = AxisBinding(
-                    axis = moved.key,
-                    inverted = delta < 0,
-                    rest = if (abs(restValue) > 0.8f) restValue.toInt().coerceIn(-1, 1) else 0,
-                )
-                settings.keys.assignAxis(capturing, binding)
-                // Ось сейчас отклонена: пусть сначала вернётся в покой, иначе действие сработало бы сразу.
-                if (!capturing.isAxis) {
-                    axisPressed += binding
-                    axisSuppressed += binding
-                }
-                menu.capturingKey = null
-                captureBaseline = null
-            }
-            return true
-        }
-        captureBaseline = null
-
-        axisValues.putAll(values)
-        updateAxes()
+        input.onAxes(event.eventTime, ranges, values)
         return true
-    }
-
-    /** Отклонение для осевого действия: самая сильная из назначенных на него осей. */
-    private fun axisValue(action: RemoteAction): Float {
-        // Ось, назначенная и на меню, и на просмотр: работает то, что сейчас на экране.
-        val menuOpen = uiHost.place != PanelPlace.Hidden
-        val active = when (action.axisContext) {
-            AxisContext.Menu -> menuOpen
-            AxisContext.Viewing -> !menuOpen
-            AxisContext.Always -> true
-        }
-        if (!active) return 0f
-        return axisBindingValue(action)
-    }
-
-    private fun axisBindingValue(action: RemoteAction): Float =
-        settings.keys.axisBindings().filter { it.first == action }
-            .map { (_, binding) -> binding.valueOf(axisValues[binding.axis] ?: binding.rest.toFloat()) }
-            .maxByOrNull { abs(it) } ?: 0f
-
-    private fun updateAxes() {
-        // Оси на кнопочных действиях (например, курок на «Нажатии») — как кнопка, с запасом от дребезга.
-        settings.keys.axisBindings().filter { !it.first.isAxis }.forEach { (action, binding) ->
-            val value = binding.valueOf(axisValues[binding.axis] ?: binding.rest.toFloat())
-            val pressed = binding in axisPressed
-            if (!pressed && value > AXIS_PRESS) {
-                axisPressed += binding
-                if (binding !in axisSuppressed) axisButton(action, down = true)
-            } else if (pressed && value < AXIS_RELEASE) {
-                axisPressed -= binding
-                if (!axisSuppressed.remove(binding)) axisButton(action, down = false)
-            }
-        }
-
-        // Стрелки меню — по одному шагу на отклонение.
-        val x = direction(axisValue(RemoteAction.AxisNavHorizontal))
-        if (x != navX) {
-            navX = x
-            if (x != 0) panels.navKey(if (x < 0) KeyEvent.KEYCODE_DPAD_LEFT else KeyEvent.KEYCODE_DPAD_RIGHT)
-        }
-        val y = direction(axisValue(RemoteAction.AxisNavVertical))
-        if (y != navY) {
-            navY = y
-            if (y != 0) panels.navKey(if (y < 0) KeyEvent.KEYCODE_DPAD_UP else KeyEvent.KEYCODE_DPAD_DOWN)
-        }
-        // Прокрутка и перемотка — плавно, пока ось отклонена.
-        handler.removeCallbacks(axisTick)
-        if (listOf(RemoteAction.AxisScroll, RemoteAction.AxisSeek, RemoteAction.AxisZoom).any { abs(axisValue(it)) > DEAD_ZONE }) {
-            handler.post(axisTick)
-        }
-    }
-
-    private fun axisButton(action: RemoteAction, down: Boolean) {
-        val now = SystemClock.uptimeMillis()
-        if (action == RemoteAction.Click) {
-            if (down) panels.triggerDown(now) else panels.triggerUp(now, cancelled = false)
-        } else if (down) {
-            perform(action)
-        }
-    }
-
-    private fun direction(value: Float) = when {
-        value > NAV_THRESHOLD -> 1
-        value < -NAV_THRESHOLD -> -1
-        else -> 0
-    }
-
-    private val axisTick = object : Runnable {
-        override fun run() {
-            val scroll = axisValue(RemoteAction.AxisScroll)
-            val seek = axisValue(RemoteAction.AxisSeek)
-            val zoom = axisValue(RemoteAction.AxisZoom)
-            // Вверх по стику (назначен «вверх») — приблизить, плавно, примерно вдвое за секунду.
-            if (abs(zoom) > DEAD_ZONE) menuActions.setZoom(menu.zoom * (1f + zoom * AXIS_ZOOM_PER_TICK))
-            // Стик вниз (плюс) прокручивает вниз — как колесо от себя.
-            if (abs(scroll) > DEAD_ZONE) panels.scroll(-scroll * AXIS_SCROLL_PER_TICK)
-            if (abs(seek) > DEAD_ZONE) menuActions.seekBy((seek * AXIS_SEEK_MS_PER_TICK).toLong())
-            if (abs(scroll) > DEAD_ZONE || abs(seek) > DEAD_ZONE || abs(zoom) > DEAD_ZONE) handler.postDelayed(this, AXIS_TICK_MS)
-        }
     }
 
     // --- Режимы -----------------------------------------------------------------------------
@@ -895,35 +707,13 @@ class PlayerActivity : ComponentActivity() {
     private fun dp(value: Int) = (value * resources.displayMetrics.density).toInt()
 
     companion object {
+        private const val KEY_STEREO = "stereo"
         /** Своя панорама окружения: копия, уменьшенная до [EnvironmentLayer.CUSTOM_MAX_WIDTH]. */
         fun environmentFile(context: Context) = java.io.File(context.filesDir, "environment.jpg")
 
-        private const val SEEK_STEP_MS = 10_000L
-        private const val LONG_SEEK_STEP_MS = 30_000L
-        private const val KEY_STEREO = "stereo"
-        private const val SCROLL_STEP = 1f
-        private const val DEAD_ZONE = 0.2f
-        private const val NAV_THRESHOLD = 0.6f
-        private const val CAPTURE_THRESHOLD = 0.6f
-        private const val CAPTURE_SETTLE_MS = 400L
-        private const val AXIS_PRESS = 0.6f
-        private const val AXIS_RELEASE = 0.3f
-        private const val AXIS_TICK_MS = 50L
-        private const val AXIS_SCROLL_PER_TICK = 0.3f
-        private const val AXIS_ZOOM_PER_TICK = 0.035f
 
         /** Сторона фото не больше: 8K-панорама в памяти — уже около 130 МБ. */
         private const val MAX_IMAGE_SIDE = 6144
-        /** При полном отклонении — около 20 секунд видео за секунду. */
-        private const val AXIS_SEEK_MS_PER_TICK = 1_000f
-
-        /** Действия, которые повторяются, пока кнопку держат. */
-        private val REPEATABLE = setOf(
-            RemoteAction.SeekBack, RemoteAction.SeekForward, RemoteAction.SeekBackLong, RemoteAction.SeekForwardLong,
-            RemoteAction.VolumeUp, RemoteAction.VolumeDown,
-            RemoteAction.NavUp, RemoteAction.NavDown, RemoteAction.NavLeft, RemoteAction.NavRight,
-            RemoteAction.ScrollUp, RemoteAction.ScrollDown,
-        )
         private const val SAVE_INTERVAL_MS = 5_000L
     }
 }
