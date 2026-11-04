@@ -4,6 +4,7 @@ import java.util.Properties
 plugins {
     alias(libs.plugins.androidApplication)
     alias(libs.plugins.composeCompiler)
+    alias(libs.plugins.roborazzi)
 }
 
 kotlin {
@@ -34,6 +35,15 @@ dependencies {
 
     implementation(libs.compose.uiToolingPreview)
     debugImplementation(libs.compose.uiTooling)
+
+    testImplementation(libs.junit)
+    testImplementation(libs.kotlin.test)
+    testImplementation(libs.robolectric)
+    testImplementation(libs.roborazzi)
+    testImplementation(libs.roborazzi.compose)
+    testImplementation(libs.androidx.test.core)
+    testImplementation(libs.compose.uiTestJunit4)
+    debugImplementation(libs.compose.uiTestManifest)
 }
 
 // Версия из git: номер сборки — число коммитов, плюс короткий хеш; «*» — есть незакоммиченные правки.
@@ -103,5 +113,18 @@ android {
     buildFeatures {
         compose = true
         buildConfig = true
+    }
+    testOptions {
+        unitTests {
+            // Robolectric берёт ресурсы и манифест настоящего приложения.
+            isIncludeAndroidResources = true
+            all {
+                // Robolectric создаёт дескрипторы файлов через внутренний API JDK.
+                it.jvmArgs(
+                    "--add-exports=java.base/jdk.internal.access=ALL-UNNAMED",
+                    "--add-opens=java.base/java.io=ALL-UNNAMED",
+                )
+            }
+        }
     }
 }

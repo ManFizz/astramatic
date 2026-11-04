@@ -10,4 +10,12 @@ plugins {
     alias(libs.plugins.kotlinJvm) apply false
     alias(libs.plugins.kotlinMultiplatform) apply false
     alias(libs.plugins.kotlinSerialization) apply false
+    alias(libs.plugins.roborazzi) apply false
+}
+
+// Всё, что проверяется без устройства. Описание — в docs/testing.md.
+tasks.register("verifyAll") {
+    group = "verification"
+    description = "Тесты логики и сравнение скриншотов с эталонами"
+    dependsOn(":androidApp:verifyRoborazziDebug", ":shared:jvmTest", ":desktopApp:test")
 }

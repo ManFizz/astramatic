@@ -25,6 +25,12 @@ Release подписывается ключом из `%USERPROFILE%\.android-key
 обновить установленную release-версию не получится, только удалить и поставить заново.
 Если файлов нет, release соберётся без подписи.
 
+## Документы
+
+- [docs/product.md](docs/product.md) — что умеет приложение и что дальше.
+- [docs/scenarios/](docs/scenarios/README.md) — сценарии поведения и открытые вопросы.
+- [docs/testing.md](docs/testing.md) — проверка: `gradlew verifyAll`, скриншоты, эмулятор.
+
 ## Настройки на ПК
 
 `%USERPROFILE%\.astramatic\desktop.json` — папки, ключ подключения телефонов, доступ к Darkframe.

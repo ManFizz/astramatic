@@ -37,6 +37,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -80,6 +81,9 @@ import com.manfis.astramatic.settings.AppSettings
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.UUID
+
+/** Строка версии на главной. В скриншот-тестах подменяется: хеш коммита менял бы эталон при каждом коммите. */
+internal val LocalVersionText = staticCompositionLocalOf { "v${BuildConfig.VERSION_NAME} · ${BuildConfig.COMMIT}" }
 
 internal sealed interface Screen {
     data object Home : Screen
@@ -243,7 +247,7 @@ private fun HomeScreen(
             Spacer(Modifier.weight(1f))
             // Сверить с `git log -1`: тот же хеш — на телефоне последняя версия.
             Text(
-                "v${BuildConfig.VERSION_NAME} · ${BuildConfig.COMMIT}",
+                LocalVersionText.current,
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
             )
