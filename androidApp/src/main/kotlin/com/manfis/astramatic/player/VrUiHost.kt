@@ -65,8 +65,7 @@ class VrUiHost(
     private var virtualDisplay: VirtualDisplay? = null
     private var presentation: Presentation? = null
 
-    private var touchDownTime = 0L
-    private var hovering = false
+    private val pointer = PanelPointer { presentation?.window?.decorView }
 
     override var place = PanelPlace.Hidden
         private set
@@ -125,39 +124,10 @@ class VrUiHost(
         presentation = null
     }
 
-    override fun touch(phase: TouchPhase, x: Float, y: Float) {
-        val root = presentation?.window?.decorView ?: return
-        val now = SystemClock.uptimeMillis()
-        val action = when (phase) {
-            TouchPhase.Down -> MotionEvent.ACTION_DOWN
-            TouchPhase.Move -> MotionEvent.ACTION_MOVE
-            TouchPhase.Up -> MotionEvent.ACTION_UP
-            TouchPhase.Cancel -> MotionEvent.ACTION_CANCEL
-        }
-        if (phase == TouchPhase.Down) touchDownTime = now
-        val event = MotionEvent.obtain(touchDownTime, now, action, x, y, 0).apply {
-            source = InputDevice.SOURCE_TOUCHSCREEN
-        }
-        root.dispatchTouchEvent(event)
-        event.recycle()
-    }
+    override fun touch(phase: TouchPhase, x: Float, y: Float) = pointer.touch(phase, x, y)
 
     /** Как наведение мыши. */
-    override fun hover(x: Float?, y: Float?) {
-        val root = presentation?.window?.decorView ?: return
-        val action = when {
-            x == null || y == null -> if (hovering) MotionEvent.ACTION_HOVER_EXIT else return
-            !hovering -> MotionEvent.ACTION_HOVER_ENTER
-            else -> MotionEvent.ACTION_HOVER_MOVE
-        }
-        hovering = action != MotionEvent.ACTION_HOVER_EXIT
-        val now = SystemClock.uptimeMillis()
-        val event = MotionEvent.obtain(now, now, action, x ?: 0f, y ?: 0f, 0).apply {
-            source = InputDevice.SOURCE_MOUSE
-        }
-        root.dispatchGenericMotionEvent(event)
-        event.recycle()
-    }
+    override fun hover(x: Float?, y: Float?) = pointer.hover(x, y)
 
     /** Где сейчас живёт интерфейс: окно виртуального дисплея или слой на экране. */
     private fun root(): android.view.View? = when (place) {

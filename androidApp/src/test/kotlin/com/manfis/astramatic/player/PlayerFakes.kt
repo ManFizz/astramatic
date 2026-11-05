@@ -80,7 +80,9 @@ class FakeScene : VrScene {
     override var hasVideo = false
     var recenters = 0
     var centersOnPanel = 0
-    var placedInFront = 0
+    val placements = mutableListOf<PanelPlacement>()
+    val placedInFront get() = placements.count { it == PanelPlacement.InFront }
+    override var hoverSide: SideSlot? = null
 
     override fun recenter() {
         recenters++
@@ -88,7 +90,7 @@ class FakeScene : VrScene {
     override fun centerOnPanel() {
         centersOnPanel++
     }
-    override fun placePanelInFront() {
-        placedInFront++
+    override fun placePanel(placement: PanelPlacement) {
+        placements += placement
     }
 }

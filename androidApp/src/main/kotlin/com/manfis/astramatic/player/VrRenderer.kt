@@ -1,9 +1,12 @@
 package com.manfis.astramatic.player
 
+import android.graphics.Bitmap
 import android.graphics.SurfaceTexture
 import android.opengl.GLES11Ext
 import android.opengl.GLES20
+import android.opengl.GLUtils
 import android.opengl.Matrix
+import android.os.SystemClock
 import android.view.Surface
 import com.google.cardboard.sdk.CardboardView
 import com.google.cardboard.sdk.HeadTransform
@@ -16,7 +19,12 @@ import com.manfis.astramatic.settings.AppSettings
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.microedition.khronos.egl.EGLConfig
 import kotlin.math.PI
+import kotlin.math.abs
+import kotlin.math.atan
+import kotlin.math.tan
 import java.io.File
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
 
 /**
  * Рисует для каждого глаза видео (на сферу или плоскость) и панель интерфейса с курсором взгляда.
@@ -111,13 +119,8 @@ class VrRenderer(
 
     /** Плоский экран в метрах: пересобирается, когда меняются размер, расстояние, изгиб или пропорции кадра. */
     private fun flatScreen(format: VideoFormat): Mesh {
-        val eyeAspect = when (format.stereo) {
-            StereoLayout.Mono -> videoAspect
-            StereoLayout.SideBySide -> videoAspect / 2
-            StereoLayout.TopBottom -> videoAspect * 2
-        }
         val height = settings.screenHeight
-        val key = listOf(height * eyeAspect, height, settings.screenDistance, settings.screenCurve)
+        val key = listOf(height * eyeAspect(format), height, settings.screenDistance, settings.screenCurve)
         if (key != screenKey) {
             screenKey = key
             screenMesh = Meshes.screen(key[0], key[1], key[2], key[3])
@@ -143,6 +146,34 @@ class VrRenderer(
 
     private var uBrightness = 0
     private var uAlpha = 0
+
+    private var sideProgram = 0
+    private var sidePosition = 0
+    private var sideUv = 0
+    private var sideMvp = 0
+    private var sideAlphaUniform = 0
+    private val sideTextures = IntArray(2)
+    private var sideUploaded: SideImages? = null
+    private var sideLayoutKey: List<Float>? = null
+    private var sideLayoutCached: SideLayout? = null
+    private var sideAlpha = 0f
+    private val sideModel = FloatArray(16)
+
+    /** Вид глаза для панели: сдвиг глаз подобран так, чтобы сводить их как на видео. */
+    private val panelEyeView = FloatArray(16)
+    private val sideEyeView = FloatArray(16)
+
+    private val depth = PanelDepth()
+    private var depthProbeAt = 0L
+    private var probeFramebuffer = 0
+    private var probeTexture = 0
+    private val probePixels: ByteBuffer =
+        ByteBuffer.allocateDirect(PROBE_WIDTH * 2 * PROBE_HEIGHT * 4).order(ByteOrder.nativeOrder())
+    private val probeLeft = ByteArray(PROBE_WIDTH * PROBE_HEIGHT)
+    private val probeRight = ByteArray(PROBE_WIDTH * PROBE_HEIGHT)
+    private val probeProjection = FloatArray(16)
+    private val probeRotation = FloatArray(16)
+    private val probeView = FloatArray(16)
 
     private var shapeProgram = 0
     private var shapePosition = 0
@@ -180,8 +211,16 @@ class VrRenderer(
     /** Повернуть видео к панели: файл выбран в меню — пусть начнётся там, где меню. */
     override fun centerOnPanel() = tracker.centerOnPanel()
 
-    /** Поставить панель перед взглядом. */
-    override fun placePanelInFront() = tracker.placePanelInFront()
+    /** Поставить панель в следующем кадре. */
+    override fun placePanel(placement: PanelPlacement) = tracker.placePanel(placement)
+
+    override val hoverSide: SideSlot? get() = tracker.hoverSide
+
+    /** Включён VR, а не плоский показ на экране телефона: соседние окна есть только в шлеме. */
+    @Volatile var stereoView = true
+
+    /** Картинки соседних окон плоского экрана; null — окон нет. */
+    @Volatile var sideImages: SideImages? = null
 
     /** Трекинг ещё устаканивается после запуска: панель не видна. */
     private val settling get() = tracker.settling
@@ -209,6 +248,15 @@ class VrRenderer(
         cursorMvp = GLES20.glGetUniformLocation(cursorProgram, "uMvp")
         cursorProgress = GLES20.glGetUniformLocation(cursorProgram, "uProgress")
 
+        sideProgram = GlUtil.program(CURSOR_VERTEX_SHADER, SIDE_FRAGMENT_SHADER)
+        sidePosition = GLES20.glGetAttribLocation(sideProgram, "aPosition")
+        sideUv = GLES20.glGetAttribLocation(sideProgram, "aUv")
+        sideMvp = GLES20.glGetUniformLocation(sideProgram, "uMvp")
+        sideAlphaUniform = GLES20.glGetUniformLocation(sideProgram, "uAlpha")
+        GLES20.glGenTextures(2, sideTextures, 0)
+        sideUploaded = null
+        createProbe()
+
         environment.create()
 
         onVideoSurfaceReady(video.create())
@@ -223,6 +271,7 @@ class VrRenderer(
 
         headTransform.getHeadView(headView, 0)
         if (!(BuildConfig.DEBUG && applyDebugLook())) correctDrift()
+        tracker.sideLayout = currentSideLayout()
         // Направление взгляда в мире: третья строка матрицы вида со знаком минус.
         tracker.update(-headView[2], -headView[6], -headView[10])
 
@@ -235,6 +284,8 @@ class VrRenderer(
         val pop = 0.97f + 0.03f * ease(appear)
         Matrix.translateM(panelModel, 0, panelRotation, 0, 0f, tracker.panelCy, tracker.panelZ)
         Matrix.scaleM(panelModel, 0, tracker.panelW * pop, tracker.panelH * pop, 1f)
+
+        measureDepth()
 
         val interactive = panelVisible && !settling
         if (interactive && !tracker.hitX.isNaN()) {
@@ -254,6 +305,8 @@ class VrRenderer(
             appear = appear.coerceAtMost(0.4f)
         }
         appear = if (panelVisible && !settling) (appear + dt / APPEAR_S).coerceAtMost(1f) else 0f
+        val sideStep = dt / SIDE_FADE_S
+        sideAlpha = if (tracker.sideWanted) (sideAlpha + sideStep).coerceAtMost(1f) else (sideAlpha - sideStep).coerceAtLeast(0f)
     }
 
     private fun ease(t: Float): Float = 1f - (1f - t) * (1f - t) * (1f - t)
@@ -277,7 +330,9 @@ class VrRenderer(
     }
 
     /** Состояние для отладочной команды. */
-    fun debugState(): String = tracker.describe() + " recenters=$recenterCount"
+    fun debugState(): String = tracker.describe() + " recenters=$recenterCount" +
+        " hasVideo=$hasVideo side=${tracker.hoverSide} sideWanted=${tracker.sideWanted}" +
+        " disparityDeg=${"%.2f".format(java.util.Locale.ROOT, Math.toDegrees(depth.radians.toDouble()))} measured=${depth.measured}"
 
     /**
      * Гироскоп со временем уводит поворот в сторону — поворачиваем мир обратно на оценку ухода по компасу.
@@ -301,8 +356,10 @@ class VrRenderer(
 
         drawEnvironment(eye)
         if (hasVideo && !calibration) drawVideo(eye, zoomed)
+        drawSideCards(eye)
 
         if (panelVisible && panel.isReady && !settling) {
+            fillDepthView(eye, -tracker.panelZ, panelEyeView)
             GLES20.glEnable(GLES20.GL_BLEND)
             // Кадры виртуального дисплея с премультиплицированной альфой (прозрачные углы панели).
             GLES20.glBlendFunc(GLES20.GL_ONE, GLES20.GL_ONE_MINUS_SRC_ALPHA)
@@ -312,7 +369,9 @@ class VrRenderer(
             GLES20.glUniform4f(uUvRect, 0f, 1f - visible, 1f, visible)
             GLES20.glUniform1f(uBrightness, 1f)
             GLES20.glUniform1f(uAlpha, ease(appear))
-            drawTextured(panel, quad, eye, projection, panelModel, setUvRect = false)
+            Matrix.multiplyMM(viewModel, 0, panelEyeView, 0, panelModel, 0)
+            Matrix.multiplyMM(mvp, 0, projection, 0, viewModel, 0)
+            drawPrepared(panel, quad, setUvRect = false)
             GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
             val handle = hoverHandle
             if (panelLayout == PanelLayout.Menu && (gaze != null || handle != Handle.None)) drawHandles(eye, projection, handle)
@@ -357,7 +416,7 @@ class VrRenderer(
     private fun drawShape(eye: CardboardView.Eye, projection: FloatArray, cx: Float, cy: Float, w: Float, h: Float, alpha: Float) {
         Matrix.translateM(shapeModel, 0, panelRotation, 0, cx, cy, tracker.panelZ + CURSOR_LIFT * tracker.panelScale / 2)
         Matrix.scaleM(shapeModel, 0, w, h, 1f)
-        Matrix.multiplyMM(viewModel, 0, eye.eyeView, 0, shapeModel, 0)
+        Matrix.multiplyMM(viewModel, 0, panelEyeView, 0, shapeModel, 0)
         Matrix.multiplyMM(mvp, 0, projection, 0, viewModel, 0)
         GLES20.glUniformMatrix4fv(shapeMvp, 1, false, mvp, 0)
         GLES20.glUniform2f(shapeSize, w, h)
@@ -444,7 +503,11 @@ class VrRenderer(
             Matrix.multiplyMM(viewModel, 0, eye.eyeView, 0, model, 0)
         }
         Matrix.multiplyMM(mvp, 0, projection, 0, viewModel, 0)
+        drawPrepared(texture, mesh, setUvRect)
+    }
 
+    /** Рисует с уже посчитанной матрицей [mvp]. */
+    private fun drawPrepared(texture: ExternalTexture, mesh: Mesh, setUvRect: Boolean) {
         GLES20.glUseProgram(textureProgram)
         GLES20.glUniformMatrix4fv(uMvp, 1, false, mvp, 0)
         GLES20.glUniformMatrix4fv(uTexMatrix, 1, false, texture.transform, 0)
@@ -454,8 +517,167 @@ class VrRenderer(
         drawMesh(mesh, aPosition, aUv)
     }
 
+    /**
+     * Вид глаза для предмета на расстоянии [distance]: сдвиг глаз масштабируется так, чтобы сводить их
+     * как на видео. Размер предмета на глаз не меняется, а в 2D глаз один и менять нечего.
+     */
+    private fun fillDepthView(eye: CardboardView.Eye, distance: Float, out: FloatArray) {
+        eye.eyeView.copyInto(out)
+        val eyeOffset = abs(eye.eyeFromHead[12])
+        if (!settings.menuDepthAuto || eyeOffset < 0.0001f) return
+        val eyeSeparation = 2 * eyeOffset
+        val onVideo = hasVideo && !calibration
+        // Окружение и сфера — на бесконечности, плоский экран — на своём расстоянии, стерео добавляет сдвиг из кадра.
+        val geometric = if (onVideo && format.projection == Projection.Flat) eyeSeparation / settings.screenDistance else 0f
+        val measured = if (onVideo && format.stereo != StereoLayout.Mono) depth.radians else 0f
+        val vergence = ((geometric + measured) * zoom).coerceAtLeast(0f)
+        val scale = vergence * distance / eyeSeparation
+        out[12] *= scale
+        out[13] *= scale
+        out[14] *= scale
+    }
+
+    private fun eyeAspect(format: VideoFormat) = when (format.stereo) {
+        StereoLayout.Mono -> videoAspect
+        StereoLayout.SideBySide -> videoAspect / 2
+        StereoLayout.TopBottom -> videoAspect * 2
+    }
+
+    /** Соседние окна есть у плоского экрана в шлеме. Пересчитываются, только когда меняется сам экран. */
+    private fun currentSideLayout(): SideLayout? {
+        val format = format
+        if (sideImages == null || !hasVideo || calibration || !stereoView || format.projection != Projection.Flat) return null
+        val key = listOf(settings.screenHeight * eyeAspect(format), settings.screenDistance, settings.screenCurve)
+        if (key != sideLayoutKey) {
+            sideLayoutKey = key
+            sideLayoutCached = SideLayout.of(key[0], key[1], key[2])
+        }
+        return sideLayoutCached
+    }
+
+    private fun drawSideCards(eye: CardboardView.Eye) {
+        val side = tracker.sideLayout ?: return
+        val images = sideImages ?: return
+        if (sideAlpha <= 0f) return
+        if (images !== sideUploaded) {
+            uploadSide(sideTextures[0], images.left)
+            uploadSide(sideTextures[1], images.right)
+            sideUploaded = images
+        }
+        fillDepthView(eye, side.distance, sideEyeView)
+        GLES20.glEnable(GLES20.GL_BLEND)
+        GLES20.glBlendFunc(GLES20.GL_ONE, GLES20.GL_ONE_MINUS_SRC_ALPHA)
+        GLES20.glUseProgram(sideProgram)
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        for (slot in SideSlot.entries) {
+            val hovered = tracker.hoverSide == slot
+            val grow = if (hovered) SIDE_HOVER_SCALE else 1f
+            Matrix.setRotateM(sideModel, 0, tracker.videoYawDeg, 0f, 1f, 0f)
+            if (tracker.videoPitchDeg != 0f) Matrix.rotateM(sideModel, 0, tracker.videoPitchDeg, 1f, 0f, 0f)
+            Matrix.rotateM(sideModel, 0, side.yawOf(slot), 0f, 1f, 0f)
+            Matrix.translateM(sideModel, 0, 0f, 0f, -side.distance)
+            Matrix.scaleM(sideModel, 0, side.cardWidth * grow, side.cardHeight * grow, 1f)
+            Matrix.multiplyMM(viewModel, 0, sideEyeView, 0, sideModel, 0)
+            Matrix.multiplyMM(mvp, 0, zoomed, 0, viewModel, 0)
+            GLES20.glUniformMatrix4fv(sideMvp, 1, false, mvp, 0)
+            GLES20.glUniform1f(sideAlphaUniform, sideAlpha * (if (hovered) 1f else SIDE_IDLE_ALPHA))
+            GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, sideTextures[slot.ordinal])
+            drawMesh(quad, sidePosition, sideUv)
+        }
+        GLES20.glDisable(GLES20.GL_BLEND)
+    }
+
+    private fun uploadSide(texture: Int, bitmap: Bitmap) {
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, texture)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_LINEAR)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_LINEAR)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_S, GLES20.GL_CLAMP_TO_EDGE)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_WRAP_T, GLES20.GL_CLAMP_TO_EDGE)
+        GLUtils.texImage2D(GLES20.GL_TEXTURE_2D, 0, bitmap, 0)
+    }
+
+    private fun createProbe() {
+        val ids = IntArray(1)
+        GLES20.glGenTextures(1, ids, 0)
+        probeTexture = ids[0]
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, probeTexture)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MIN_FILTER, GLES20.GL_NEAREST)
+        GLES20.glTexParameteri(GLES20.GL_TEXTURE_2D, GLES20.GL_TEXTURE_MAG_FILTER, GLES20.GL_NEAREST)
+        GLES20.glTexImage2D(
+            GLES20.GL_TEXTURE_2D, 0, GLES20.GL_RGBA, PROBE_WIDTH * 2, PROBE_HEIGHT, 0,
+            GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, null,
+        )
+        GLES20.glGenFramebuffers(1, ids, 0)
+        probeFramebuffer = ids[0]
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, probeFramebuffer)
+        GLES20.glFramebufferTexture2D(GLES20.GL_FRAMEBUFFER, GLES20.GL_COLOR_ATTACHMENT0, GLES20.GL_TEXTURE_2D, probeTexture, 0)
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, 0)
+        Matrix.perspectiveM(probeProjection, 0, PROBE_FOV_Y_DEG, PROBE_WIDTH.toFloat() / PROBE_HEIGHT, Z_NEAR, Z_FAR)
+    }
+
+    /**
+     * Стерео: насколько расходятся глаза в кадре рядом с панелью. Видео рисуется для каждого глаза маленькой
+     * картинкой из одной точки, поэтому разница между ними — только сдвиг, заложенный в самом видео.
+     * Так одинаково работает с любой проекцией. Пока ничего поверх видео нет, не измеряем.
+     */
+    private fun measureDepth() {
+        val format = format
+        val needed = settings.menuDepthAuto && stereoView && hasVideo && !calibration && !settling &&
+            video.isReady && format.stereo != StereoLayout.Mono && (panelVisible || sideAlpha > 0f)
+        if (!needed) {
+            depth.reset()
+            return
+        }
+        val now = SystemClock.uptimeMillis()
+        if (depth.measured && now - depthProbeAt < PROBE_INTERVAL_MS) return
+        depthProbeAt = now
+
+        val framebuffer = IntArray(1)
+        val viewport = IntArray(4)
+        GLES20.glGetIntegerv(GLES20.GL_FRAMEBUFFER_BINDING, framebuffer, 0)
+        GLES20.glGetIntegerv(GLES20.GL_VIEWPORT, viewport, 0)
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, probeFramebuffer)
+        GLES20.glDisable(GLES20.GL_DEPTH_TEST)
+        GLES20.glDisable(GLES20.GL_CULL_FACE)
+        GLES20.glDisable(GLES20.GL_BLEND)
+        GLES20.glViewport(0, 0, PROBE_WIDTH * 2, PROBE_HEIGHT)
+        GLES20.glClearColor(0f, 0f, 0f, 1f)
+        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
+
+        // Смотрим туда, где панель; если её нет, а видны только соседние окна, — на центр экрана.
+        Matrix.setRotateM(probeRotation, 0, if (panelVisible) tracker.panelYawDeg else tracker.videoYawDeg, 0f, 1f, 0f)
+        Matrix.rotateM(probeRotation, 0, if (panelVisible) tracker.panelPitchDeg else tracker.videoPitchDeg, 1f, 0f, 0f)
+        Matrix.transposeM(probeView, 0, probeRotation, 0)
+        Matrix.multiplyMM(viewModel, 0, probeView, 0, videoModel, 0)
+        Matrix.multiplyMM(mvp, 0, probeProjection, 0, viewModel, 0)
+        GLES20.glUseProgram(textureProgram)
+        GLES20.glUniform1f(uAlpha, 1f)
+        GLES20.glUniform1f(uBrightness, 1f)
+        val mesh = meshFor(format)
+        for (right in listOf(false, true)) {
+            GLES20.glViewport(if (right) PROBE_WIDTH else 0, 0, PROBE_WIDTH, PROBE_HEIGHT)
+            val rect = eyeRect(format.stereo, right)
+            GLES20.glUniform4f(uUvRect, rect[0], rect[1], rect[2], rect[3])
+            drawPrepared(video, mesh, setUvRect = false)
+        }
+        probePixels.position(0)
+        GLES20.glReadPixels(0, 0, PROBE_WIDTH * 2, PROBE_HEIGHT, GLES20.GL_RGBA, GLES20.GL_UNSIGNED_BYTE, probePixels)
+        GLES20.glBindFramebuffer(GLES20.GL_FRAMEBUFFER, framebuffer[0])
+        GLES20.glViewport(viewport[0], viewport[1], viewport[2], viewport[3])
+
+        for (y in 0 until PROBE_HEIGHT) {
+            for (x in 0 until PROBE_WIDTH) {
+                probeLeft[y * PROBE_WIDTH + x] = probePixels.get((y * PROBE_WIDTH * 2 + x) * 4 + 1)
+                probeRight[y * PROBE_WIDTH + x] = probePixels.get((y * PROBE_WIDTH * 2 + PROBE_WIDTH + x) * 4 + 1)
+            }
+        }
+        val shift = StereoDisparity.estimate(probeLeft, probeRight, PROBE_WIDTH, PROBE_HEIGHT, PROBE_MIN_SHIFT, PROBE_MAX_SHIFT)
+        val tanPerPixel = 2 * tan(Math.toRadians(PROBE_FOV_Y_DEG / 2.0)).toFloat() / PROBE_HEIGHT
+        depth.sample(shift?.let { atan(it * tanPerPixel) })
+    }
+
     private fun drawCursor(eye: CardboardView.Eye, projection: FloatArray) {
-        Matrix.multiplyMM(viewModel, 0, eye.eyeView, 0, cursorModel, 0)
+        Matrix.multiplyMM(viewModel, 0, panelEyeView, 0, cursorModel, 0)
         Matrix.multiplyMM(mvp, 0, projection, 0, viewModel, 0)
         GLES20.glUseProgram(cursorProgram)
         GLES20.glUniformMatrix4fv(cursorMvp, 1, false, mvp, 0)
@@ -573,6 +795,29 @@ class VrRenderer(
         private const val Z_NEAR = 0.1f
         private const val Z_FAR = 100f
         private const val SPHERE_RADIUS = 10f
+
+        private const val SIDE_FADE_S = 0.25f
+        private const val SIDE_IDLE_ALPHA = 0.8f
+        private const val SIDE_HOVER_SCALE = 1.05f
+
+        // Замер стерео: область около 48° × 28°, примерно 0,4° на пиксель. Сдвиг от −1° до 7°.
+        private const val PROBE_WIDTH = 128
+        private const val PROBE_HEIGHT = 72
+        private const val PROBE_FOV_Y_DEG = 28f
+        private const val PROBE_MIN_SHIFT = -3
+        private const val PROBE_MAX_SHIFT = 18
+        private const val PROBE_INTERVAL_MS = 250L
+
+        private const val SIDE_FRAGMENT_SHADER = """
+precision mediump float;
+uniform sampler2D uTexture;
+uniform float uAlpha;
+varying vec2 vUv;
+void main() {
+    // У картинки первая строка сверху, а у прямоугольника v = 0 внизу. Цвет с премультиплицированной альфой.
+    gl_FragColor = texture2D(uTexture, vec2(vUv.x, 1.0 - vUv.y)) * uAlpha;
+}
+"""
         private const val TEXTURE_VERTEX_SHADER = """
 uniform mat4 uMvp;
 uniform mat4 uTexMatrix;
@@ -648,6 +893,9 @@ void main() {
 """
     }
 }
+
+/** Картинки соседних окон. */
+class SideImages(val left: Bitmap, val right: Bitmap)
 
 /** Куда смотреть по отладочной команде. */
 sealed interface DebugLook {

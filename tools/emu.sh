@@ -12,6 +12,7 @@
 #   tools/emu.sh aim PX PY        точно навести взгляд на точку панели, пиксели дисплея 1280×800; за краем — меньше 0 или больше размера
 #   tools/emu.sh angle YAW PITCH  точно задать взгляд в градусах: YAW — влево, PITCH — вверх
 #   tools/emu.sh free             вернуть взгляд трекингу
+#   tools/emu.sh open URI,URI     открыть очередь файлов, как при выборе в меню; формат — по имени файла
 #   tools/emu.sh press            нажать кнопку шлема и держать
 #   tools/emu.sh release          отпустить
 #   tools/emu.sh state            состояние плеера одной строкой: панель, взгляд, уголок, размер меню
@@ -89,6 +90,8 @@ install)
     a install -r -t androidApp/build/outputs/apk/debug/androidApp-debug.apk | tail -1
     ;;
 vr)
+    # Телефон стоя: лёжа главный экран повёрнут, и кнопка «Войти в VR» может быть за краем.
+    a emu sensor set acceleration 0:9.8:0 >/dev/null
     a shell am force-stop "$PACKAGE"
     a shell am start -n "$PACKAGE/com.manfis.astramatic.MainActivity" >/dev/null
     tap_button "Войти в VR" 20 || { echo "Нет кнопки «Войти в VR»" >&2; exit 1; }
@@ -134,6 +137,9 @@ press)
 release)
     a shell input motionevent UP 1000 500 >/dev/null
     ;;
+open)
+    command --es cmd open --es uris "${2:?адреса через запятую}"
+    ;;
 state)
     command --es cmd state
     ;;
@@ -144,7 +150,7 @@ stop)
     a emu kill
     ;;
 *)
-    sed -n '2,19p' "$0"
+    sed -n '2,20p' "$0"
     exit 2
     ;;
 esac

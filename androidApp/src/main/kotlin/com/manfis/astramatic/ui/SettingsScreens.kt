@@ -102,16 +102,23 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
             hint = "Стены мягко светятся цветом кадра плоского видео.",
             checked = settings.ambientLight,
         ) { settings.ambientLight = it }
-        Text("Меню: ${"%.1f".format(settings.menuDistance)} м")
-        Slider(
-            value = settings.menuDistance,
-            onValueChange = { settings.menuDistance = (it * 2).roundToInt() / 2f },
-            valueRange = MIN_MENU_DISTANCE..MAX_MENU_DISTANCE,
-        )
-        Text(
-            "Дальше — меньше сводить глаза при переходе от видео к меню. Размер меню на глаз тот же.",
-            style = MaterialTheme.typography.bodySmall,
-        )
+        SwitchRow(
+            title = "Глубина меню как у видео",
+            hint = "Глазам не нужно перестраиваться при переводе взгляда с видео на меню. У стерео глубина измеряется по кадру рядом с панелью.",
+            checked = settings.menuDepthAuto,
+        ) { settings.menuDepthAuto = it }
+        if (!settings.menuDepthAuto) {
+            Text("Меню: ${"%.1f".format(settings.menuDistance)} м")
+            Slider(
+                value = settings.menuDistance,
+                onValueChange = { settings.menuDistance = (it * 2).roundToInt() / 2f },
+                valueRange = MIN_MENU_DISTANCE..MAX_MENU_DISTANCE,
+            )
+            Text(
+                "Дальше — меньше сводить глаза при переходе от видео к меню. Размер меню на глаз тот же.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+        }
         Text("Размер меню: ${(settings.menuSize * 100).roundToInt()}%")
         Slider(
             value = settings.menuSize,

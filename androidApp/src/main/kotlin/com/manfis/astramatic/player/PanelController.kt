@@ -20,6 +20,12 @@ class PanelController(
     private val videoPlaying: () -> Boolean,
     /** Закрыть плеер. */
     private val exit: () -> Unit,
+    /** Выйти из просмотра в хаб: видео на паузе и спрятано. */
+    private val leaveToHub: () -> Unit,
+    /** Вернуться из хаба к отложенному просмотру. */
+    private val resumeViewing: () -> Unit,
+    /** Нажали соседнее окно у плоского экрана. */
+    private val openSide: (SideSlot) -> Unit = {},
     /** Панель показали, спрятали или перенесли. */
     private val onShownChanged: () -> Unit = {},
 ) {
@@ -44,25 +50,27 @@ class PanelController(
         showMenu(tab)
     }
 
-    /** Действие пульта: скрыто → полоска → главная → скрыто. Без видео меню не закрывается. */
+    /** Действие пульта: скрыто → полоска → хаб → снова просмотр. Без видео хаб не закрывается. */
     fun cycleControls() {
         when {
             host.place == PanelPlace.Hidden -> showControls()
-            menu.mode == VrMenuState.Mode.Controls -> showMenu(VrMenuState.Tab.Home)
+            menu.mode == VrMenuState.Mode.Controls -> leaveToHub()
             menu.title != null -> hide()
+            menu.parkedTitle != null -> resumeViewing()
         }
     }
 
     /**
-     * «Назад» — шаг к главной: отмена назначения кнопки → из видео на главную → из настроек на главную →
-     * вверх по папкам. На главной в VR ничего не делает, в 2D выходит.
+     * «Назад» — шаг к хабу: отмена назначения кнопки → закрыть раскрытую панель → из просмотра в хаб →
+     * из настроек в хаб → вверх по папкам. В хабе в VR ничего не делает, в 2D выходит.
      */
     fun goBack() {
         val library = menu.library.backStack
         when {
             menu.capturingKey != null -> menu.capturingKey = null
             menu.sheet != null -> menu.sheet = null
-            host.place == PanelPlace.Hidden || menu.mode == VrMenuState.Mode.Controls -> showMenu(VrMenuState.Tab.Home)
+            menu.title != null -> leaveToHub()
+            host.place == PanelPlace.Hidden -> showMenu(VrMenuState.Tab.Home)
             menu.tab != VrMenuState.Tab.Home -> menu.tab = VrMenuState.Tab.Home
             library.size > 1 -> library.removeAt(library.lastIndex)
             !stereo() -> exit()
@@ -113,9 +121,11 @@ class PanelController(
 
     fun triggerUp(time: Long, cancelled: Boolean = false) {
         val tap = press.up(time, cancelled) ?: return
+        val side = scene.hoverSide
         when {
-            // Нажатие мимо панели закрывает меню, если есть что смотреть, иначе возвращает панель перед глаза.
-            host.place == PanelPlace.Vr -> if (menu.title != null) hide() else scene.placePanelInFront()
+            tap == Tap.Short && side != null -> openSide(side)
+            // Нажатие мимо панели закрывает её, если есть что смотреть, иначе возвращает панель перед глаза.
+            host.place == PanelPlace.Vr -> if (menu.title != null) hide() else scene.placePanel(PanelPlacement.InFront)
             host.place == PanelPlace.Screen -> Unit
             tap == Tap.Long -> scene.recenter()
             else -> showControls()
@@ -135,12 +145,17 @@ class PanelController(
     }
 
     private fun showPanel(mode: VrMenuState.Mode) {
+        val menuAlreadyOpen = host.place == PanelPlace.Vr && menu.mode == VrMenuState.Mode.Menu
         menu.mode = mode
         if (mode == VrMenuState.Mode.Menu) menu.sheet = null
         autoHide.touch(clock())
         if (stereo()) {
             updateLayout()
-            scene.placePanelInFront()
+            when {
+                mode == VrMenuState.Mode.Controls -> scene.placePanel(PanelPlacement.AtGaze)
+                // Открытое меню могли отодвинуть: смена раздела или сообщение его не двигают.
+                !menuAlreadyOpen -> scene.placePanel(PanelPlacement.Center)
+            }
             scene.panelVisible = true
             host.showInVr()
             ticks.cancel(hoverTick)
@@ -160,7 +175,8 @@ class PanelController(
                 return
             }
             val gaze = scene.gaze
-            host.hover(gaze?.x, gaze?.y)
+            // Наведение идёт как мышь, а нажатие как касание: смена устройства посреди нажатия его отменяет.
+            if (!press.pressedOnPanel) host.hover(gaze?.x, gaze?.y)
             updateDwell(gaze)
             if (autoHideControls(gaze)) return
             ticks.schedule(this, HOVER_INTERVAL_MS)

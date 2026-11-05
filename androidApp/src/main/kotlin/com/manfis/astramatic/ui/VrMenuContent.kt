@@ -23,6 +23,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.manfis.astramatic.headset.HeadsetScreen
 
@@ -47,6 +48,14 @@ internal fun MenuContent(state: VrMenuState, actions: VrMenuActions) {
             }
         }
         val home = state.tab == VrMenuState.Tab.Home
+        // Из настроек при открытом видео «Главная» — это тоже выход в хаб.
+        val goHome: () -> Unit = {
+            if (state.title != null) {
+                actions.toHub()
+            } else {
+                state.tab = VrMenuState.Tab.Home
+            }
+        }
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -56,7 +65,7 @@ internal fun MenuContent(state: VrMenuState, actions: VrMenuActions) {
                 Text("AstraMatic", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(start = 8.dp))
                 Spacer(Modifier.weight(1f))
             } else {
-                TextButton(onClick = { state.tab = VrMenuState.Tab.Home }) { Text("← Главная") }
+                TextButton(onClick = goHome) { Text("← Главная") }
                 // Разделы настроек — вкладками; прокручиваются вбок, если не влезают.
                 Row(
                     modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()),
@@ -84,6 +93,15 @@ internal fun MenuContent(state: VrMenuState, actions: VrMenuActions) {
             }
         }
         HorizontalDivider()
+        val parked = state.parkedTitle
+        if (home && parked != null) {
+            Button(
+                onClick = actions::resumeViewing,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            ) {
+                Text("▶ Продолжить: $parked", maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+        }
         Box(Modifier.fillMaxWidth().weight(1f)) {
             when (state.tab) {
                 VrMenuState.Tab.Home -> LibraryApp(
@@ -94,7 +112,7 @@ internal fun MenuContent(state: VrMenuState, actions: VrMenuActions) {
                 )
                 VrMenuState.Tab.Video -> VideoTab(state, actions)
                 VrMenuState.Tab.Headset -> HeadsetScreen(
-                    onBack = { state.tab = VrMenuState.Tab.Home },
+                    onBack = goHome,
                     onSaved = actions::headsetSaved,
                     closeOnSave = false,
                     // В шлеме — на лету, вокруг калибровочная комната.

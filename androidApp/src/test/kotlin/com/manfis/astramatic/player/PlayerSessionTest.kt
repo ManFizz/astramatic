@@ -110,6 +110,9 @@ class PlayerSessionTest {
         stereo = { true },
         videoPlaying = { session.videoPlaying },
         exit = {},
+        leaveToHub = { session.toHub() },
+        resumeViewing = { session.resumeViewing() },
+        openSide = { session.openSide(it) },
     )
 
     init {
@@ -809,5 +812,143 @@ class PlayerSessionTest {
         assertEquals(VrMenuState.Tab.Headset, menu.tab)
         session.hide()
         assertEquals(PanelPlace.Hidden, host.place)
+    }
+
+    // --- Хаб: NAV-16, NAV-17 ------------------------------------------------------------------------------
+
+    @Test
+    fun `NAV-16 leaving to the hub pauses, hides the video and keeps the centre`() {
+        session.open(folder(1))
+        media.positionMs = 42_000L
+
+        session.toHub()
+
+        assertFalse(media.isPlaying)
+        assertFalse(scene.hasVideo)
+        assertEquals(null, menu.title)
+        assertEquals("v1", menu.parkedTitle)
+        assertEquals(PanelPlace.Vr, host.place)
+        assertEquals(VrMenuState.Mode.Menu, menu.mode)
+        assertEquals(VrMenuState.Tab.Home, menu.tab)
+        assertEquals("v1" to 42_000L, memory.positions.last())
+        assertEquals(0, scene.recenters)
+    }
+
+    @Test
+    fun `NAV-17 continuing brings the same file back with the same centre`() {
+        session.open(folder(1))
+        session.toHub()
+        val opened = media.opened.size
+
+        session.resumeViewing()
+
+        assertEquals(opened, media.opened.size)
+        assertTrue(media.isPlaying)
+        assertTrue(scene.hasVideo)
+        assertEquals("v1", menu.title)
+        assertEquals(null, menu.parkedTitle)
+        assertEquals(PanelPlace.Hidden, host.place)
+        assertEquals(0, scene.recenters)
+        assertEquals(0, scene.centersOnPanel)
+    }
+
+    @Test
+    fun `NAV-17 play and pause in the hub also bring the file back`() {
+        session.open(folder())
+        session.toHub()
+
+        session.togglePlayback()
+
+        assertTrue(media.isPlaying)
+        assertEquals("v0", menu.title)
+
+        session.toHub()
+        session.playKey()
+        assertEquals("v0", menu.title)
+    }
+
+    @Test
+    fun `picking another file in the hub drops the parked one and starts where the menu is`() {
+        session.open(folder())
+        session.toHub()
+
+        session.play(folder(2))
+
+        assertEquals(null, menu.parkedTitle)
+        assertEquals("v2", menu.title)
+        assertTrue(scene.hasVideo)
+        assertEquals(1, scene.centersOnPanel)
+    }
+
+    @Test
+    fun `slideshow waits in the hub and goes on after it`() {
+        settings.slideshow = true
+        settings.slideshowSeconds = 5
+        session.open(photos())
+        media.imageResult?.invoke(true, null)
+
+        session.toHub()
+        time.advance(60_000)
+        assertEquals("p0", menu.parkedTitle)
+
+        session.resumeViewing()
+        time.advance(5_000)
+        assertEquals("p1", menu.title)
+        settings.slideshow = false
+    }
+
+    @Test
+    fun `PL-14 after a playback error there is nothing to continue`() {
+        session.open(folder())
+
+        session.onPlaybackError("ошибка")
+
+        assertEquals(null, menu.title)
+        assertEquals(null, menu.parkedTitle)
+        assertFalse(scene.hasVideo)
+        assertEquals("ошибка", menu.notice)
+        assertEquals(VrMenuState.Tab.Home, menu.tab)
+    }
+
+    // --- Соседние окна: PL-21 ------------------------------------------------------------------------------
+
+    @Test
+    fun `PL-21 side windows show the neighbours and lead to the hub at the ends`() {
+        session.open(folder(1))
+        assertEquals(SideCard(SideKind.Previous, "v0"), menu.sideCards?.left)
+        assertEquals(SideCard(SideKind.Next, "v2"), menu.sideCards?.right)
+
+        session.open(folder(0))
+        assertEquals(SideKind.Hub, menu.sideCards?.left?.kind)
+
+        session.open(folder(2))
+        assertEquals(SideKind.Hub, menu.sideCards?.right?.kind)
+    }
+
+    @Test
+    fun `PL-21 side window with shuffle does not promise a file`() {
+        settings.shuffle = true
+        session.open(folder(1))
+
+        assertEquals(SideCard(SideKind.Next, "Случайный файл"), menu.sideCards?.right)
+        settings.shuffle = false
+    }
+
+    @Test
+    fun `PL-21 side windows open neighbours with the same centre, or the hub`() {
+        session.open(folder(1))
+
+        session.openSide(SideSlot.Right)
+        assertEquals("v2", menu.title)
+        assertEquals(0, scene.recenters)
+        assertEquals(0, scene.centersOnPanel)
+
+        session.openSide(SideSlot.Left)
+        assertEquals("v1", menu.title)
+
+        session.open(folder(2))
+        session.openSide(SideSlot.Right)
+        assertEquals("v2", menu.parkedTitle)
+        assertEquals(PanelPlace.Vr, host.place)
     }
 }

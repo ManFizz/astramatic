@@ -45,6 +45,9 @@ class AppSettings internal constructor(private val prefs: SharedPreferences) {
     /** Расстояние до меню в метрах; видимый размер от него не зависит. */
     var menuDistance by pref("menu_distance", 6f)
 
+    /** Глаза сводятся на меню так же, как на видео: при переводе взгляда картинка не двоится. */
+    var menuDepthAuto by pref("menu_depth_auto", true)
+
     /** Размер меню — множитель к обычному; меняется и уголками меню в шлеме. */
     var menuSize by pref("menu_size", 1f)
 

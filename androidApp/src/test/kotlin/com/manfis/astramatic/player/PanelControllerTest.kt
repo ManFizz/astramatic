@@ -34,12 +34,26 @@ class PanelControllerTest {
     private var stereo = true
     private var playing = true
     private var exits = 0
+    private var hubs = 0
+    private val sideOpened = mutableListOf<SideSlot>()
 
-    private val panels = PanelController(
+    private val panels: PanelController = PanelController(
         menu, settings, host, scene, time, clock = { time.now },
         stereo = { stereo },
         videoPlaying = { playing },
         exit = { exits++ },
+        leaveToHub = {
+            hubs++
+            menu.parkedTitle = menu.title
+            menu.title = null
+            panels.showMenu(VrMenuState.Tab.Home)
+        },
+        resumeViewing = {
+            menu.title = menu.parkedTitle
+            menu.parkedTitle = null
+            panels.hide()
+        },
+        openSide = { sideOpened += it },
     )
 
     private val point = Gaze(100f, 200f)
@@ -75,7 +89,7 @@ class PanelControllerTest {
     // --- «Назад» ---------------------------------------------------------------------------------
 
     @Test
-    fun `NAV-01 back while watching opens home and stays in VR`() {
+    fun `NAV-01 back while watching goes to the hub and stays in VR`() {
         videoOpen()
 
         panels.goBack()
@@ -227,7 +241,7 @@ class PanelControllerTest {
     // --- Действие «Полоска → меню → скрыть» ---------------------------------------------------------
 
     @Test
-    fun `RC-15 controls action cycles hidden, controls, home, hidden`() {
+    fun `RC-15 controls action cycles hidden, controls, hub, back to watching`() {
         videoOpen()
 
         panels.cycleControls()
@@ -647,5 +661,101 @@ class PanelControllerTest {
         panels.hide()
 
         assertNull(menu.notice)
+    }
+
+    // --- Хаб и место панели ---------------------------------------------------------------------------
+
+    @Test
+    fun `NAV-16 every way out of watching leads to the hub`() {
+        videoOpen()
+        panels.goBack()
+        assertEquals(1, hubs)
+
+        menu.title = "видео.mp4"
+        menu.parkedTitle = null
+        panels.showControls()
+        panels.goBack()
+        assertEquals(2, hubs)
+
+        menu.title = "видео.mp4"
+        menu.parkedTitle = null
+        panels.showMenu(VrMenuState.Tab.Headset)
+        panels.goBack()
+        assertEquals(3, hubs)
+        assertMenuOnHome()
+    }
+
+    @Test
+    fun `VR-22 controls open where you look`() {
+        videoOpen()
+
+        panels.showControls()
+
+        assertEquals(listOf(PanelPlacement.AtGaze), scene.placements.takeLast(1))
+    }
+
+    @Test
+    fun `VR-23 menu from the controls opens on the centre, not at the press`() {
+        videoOpen()
+        panels.showControls()
+
+        panels.showMenu(VrMenuState.Tab.Home)
+
+        assertEquals(listOf(PanelPlacement.Center), scene.placements.takeLast(1))
+    }
+
+    @Test
+    fun `VR-23 open menu stays where it is when the section changes or a notice comes`() {
+        panels.showMenu(VrMenuState.Tab.Home)
+        val placed = scene.placements.size
+
+        panels.showMenu(VrMenuState.Tab.Headset)
+        panels.showNotice("сообщение")
+
+        assertEquals(placed, scene.placements.size)
+    }
+
+    // --- Соседние окна -----------------------------------------------------------------------------------
+
+    @Test
+    fun `PL-21 press on a side window opens it, with or without the controls`() {
+        videoOpen()
+        scene.hoverSide = SideSlot.Left
+        press(100)
+        assertEquals(listOf(SideSlot.Left), sideOpened)
+        assertHidden()
+
+        scene.hoverSide = null
+        panels.showControls()
+        scene.hoverSide = SideSlot.Right
+        press(100)
+        assertEquals(listOf(SideSlot.Left, SideSlot.Right), sideOpened)
+    }
+
+    @Test
+    fun `PL-21 long press on a side window is still a recenter`() {
+        videoOpen()
+        scene.hoverSide = SideSlot.Left
+
+        press(PressTracker.LONG_PRESS_MS + 10)
+
+        assertEquals(emptyList(), sideOpened)
+        assertEquals(1, scene.recenters)
+    }
+
+    @Test
+    fun `VR-03 no hover goes to the interface while a press is held`() {
+        panels.showMenu(VrMenuState.Tab.Home)
+        scene.gaze = point
+        time.advance(100)
+
+        panels.triggerDown(time.now)
+        val hovers = host.hovers.size
+        time.advance(300)
+        assertEquals(hovers, host.hovers.size)
+
+        panels.triggerUp(time.now)
+        time.advance(100)
+        assertTrue(host.hovers.size > hovers)
     }
 }

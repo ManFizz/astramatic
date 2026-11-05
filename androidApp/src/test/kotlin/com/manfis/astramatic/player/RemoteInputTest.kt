@@ -77,17 +77,30 @@ class RemoteInputTest {
         override fun playQueueItem(index: Int) = Unit
         override fun headsetSaved() = Unit
         override fun openMenu(tab: VrMenuState.Tab) = Unit
+        override fun toHub() = Unit
+        override fun resumeViewing() = Unit
         override fun hide() = Unit
         override fun exit() {
             log += "exit"
         }
     }
 
-    private val panels = PanelController(
+    private val panels: PanelController = PanelController(
         menu, settings, host, scene, time, clock = { time.now },
         stereo = { true },
         videoPlaying = { true },
         exit = { log += "exit" },
+        leaveToHub = {
+            log += "hub"
+            menu.parkedTitle = menu.title
+            menu.title = null
+            panels.showMenu(VrMenuState.Tab.Home)
+        },
+        resumeViewing = {
+            menu.title = menu.parkedTitle
+            menu.parkedTitle = null
+            panels.hide()
+        },
     )
 
     private val input = RemoteInput(

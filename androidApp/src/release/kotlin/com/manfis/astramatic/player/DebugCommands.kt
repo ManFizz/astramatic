@@ -7,5 +7,12 @@ import com.manfis.astramatic.ui.VrMenuState
 /** В release отладочных команд нет. */
 object DebugCommands {
     @Suppress("UNUSED_PARAMETER")
-    fun install(activity: ComponentActivity, renderer: VrRenderer, host: PanelHost, menu: VrMenuState, settings: AppSettings) = Unit
+    fun install(
+        activity: ComponentActivity,
+        renderer: VrRenderer,
+        host: PanelHost,
+        menu: VrMenuState,
+        settings: AppSettings,
+        open: (Playlist) -> Unit,
+    ) = Unit
 }

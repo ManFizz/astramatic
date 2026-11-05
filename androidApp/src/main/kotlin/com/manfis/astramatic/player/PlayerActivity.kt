@@ -32,6 +32,7 @@ import com.manfis.astramatic.settings.KeyBindings
 import com.manfis.astramatic.ui.VrMenu
 import com.manfis.astramatic.ui.VrMenuState
 import java.util.concurrent.Executors
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
 /**
@@ -165,6 +166,9 @@ class PlayerActivity : ComponentActivity() {
             stereo = { stereoMode },
             videoPlaying = { session.videoPlaying },
             exit = ::finish,
+            leaveToHub = { session.toHub() },
+            resumeViewing = { session.resumeViewing() },
+            openSide = { session.openSide(it) },
             onShownChanged = ::updateModeButton,
         )
         session = PlayerSession(
@@ -186,7 +190,8 @@ class PlayerActivity : ComponentActivity() {
             volume = ::changeVolume,
         )
         updateModeButton()
-        DebugCommands.install(this, renderer, uiHost, menu, settings)
+        renderer.stereoView = stereoMode
+        DebugCommands.install(this, renderer, uiHost, menu, settings) { session.open(it, fromMenu = true) }
 
         lifecycleScope.launch {
             snapshotFlow { menu.tab to menu.mode }.collect { panels.updateCalibration() }
@@ -196,6 +201,9 @@ class PlayerActivity : ComponentActivity() {
         }
         lifecycleScope.launch {
             snapshotFlow { menu.capturingKey }.collect { input.captureChanged() }
+        }
+        lifecycleScope.launch {
+            snapshotFlow { menu.sideCards }.collectLatest(::showSideCards)
         }
 
         // «Назад» ведёт к главной (файлам) и дальше неё не уходит: из VR выходят только крестиком, пальцем.
@@ -237,7 +245,7 @@ class PlayerActivity : ComponentActivity() {
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean = when (keyCode) {
         // Отдельные «играть» и «пауза» некоторых пультов работают всегда.
-        KeyEvent.KEYCODE_MEDIA_PLAY -> true.also { media.play() }
+        KeyEvent.KEYCODE_MEDIA_PLAY -> true.also { session.playKey() }
         KeyEvent.KEYCODE_MEDIA_PAUSE -> true.also { media.pause() }
         else -> super.onKeyDown(keyCode, event)
     }
@@ -269,8 +277,23 @@ class PlayerActivity : ComponentActivity() {
     private fun toggleStereoMode() {
         stereoMode = !stereoMode
         menu.stereo = stereoMode
+        renderer.stereoView = stereoMode
         cardboardView.setStereoRenderMode(stereoMode)
         panels.stereoChanged()
+    }
+
+    /** Соседние окна: сразу с подписями, превью подъезжает следом. */
+    private suspend fun showSideCards(cards: SideCards?) {
+        if (cards == null) {
+            renderer.sideImages = null
+            return
+        }
+        renderer.sideImages = SideImages(SideCardArt.draw(cards.left, null), SideCardArt.draw(cards.right, null))
+        val left = SideCardArt.loadThumbnail(this, cards.left)
+        val right = SideCardArt.loadThumbnail(this, cards.right)
+        if (left != null || right != null) {
+            renderer.sideImages = SideImages(SideCardArt.draw(cards.left, left), SideCardArt.draw(cards.right, right))
+        }
     }
 
     /** Подпись — режим, в который кнопка переключит. На плоском меню у неё есть своя кнопка. */
@@ -282,6 +305,7 @@ class PlayerActivity : ComponentActivity() {
     override fun onStart() {
         super.onStart()
         remote.start()
+        session.onStart()
     }
 
     override fun onResume() {

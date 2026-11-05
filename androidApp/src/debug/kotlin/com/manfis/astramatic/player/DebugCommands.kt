@@ -4,9 +4,13 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.net.Uri
 import androidx.activity.ComponentActivity
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
+import com.manfis.astramatic.model.VideoFormat
+import com.manfis.astramatic.model.VideoFormatDetector
+import com.manfis.astramatic.remote.VideoFiles
 import com.manfis.astramatic.settings.AppSettings
 import com.manfis.astramatic.ui.VrMenuState
 
@@ -17,7 +21,24 @@ import com.manfis.astramatic.ui.VrMenuState
 object DebugCommands {
     private const val ACTION = "com.manfis.astramatic.debug.COMMAND"
 
-    fun install(activity: ComponentActivity, renderer: VrRenderer, host: PanelHost, menu: VrMenuState, settings: AppSettings) {
+    /** Очередь из адресов через запятую, начиная с первого. Формат — по имени файла. */
+    private fun playlistOf(uris: String) = Playlist(
+        uris.split(',').map { text ->
+            val uri = Uri.parse(text)
+            val name = uri.lastPathSegment.orEmpty()
+            PlaylistItem(uri, name, VideoFormatDetector.detect(name) ?: VideoFormat(), isImage = VideoFiles.isImage(name))
+        },
+        0,
+    )
+
+    fun install(
+        activity: ComponentActivity,
+        renderer: VrRenderer,
+        host: PanelHost,
+        menu: VrMenuState,
+        settings: AppSettings,
+        open: (Playlist) -> Unit,
+    ) {
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
                 when (intent.getStringExtra("cmd")) {
@@ -30,12 +51,15 @@ object DebugCommands {
                         intent.getFloatExtra("pitch", 0f),
                     )
                     "free" -> renderer.debugLook = null
+                    "open" -> open(playlistOf(intent.getStringExtra("uris").orEmpty()))
                 }
                 resultData = buildString {
                     append("place=").append(host.place)
                     append(" mode=").append(menu.mode)
                     append(" tab=").append(menu.tab)
                     append(" sheet=").append(menu.sheet)
+                    append(" title=").append(menu.title)
+                    append(" parked=").append(menu.parkedTitle)
                     append(" savedSize=").append(settings.menuSize)
                     append(' ').append(renderer.debugState())
                 }

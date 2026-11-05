@@ -76,6 +76,9 @@ class PlayerSession(
 
     private val currentIsImage get() = playlist?.current?.isImage == true
 
+    /** Просмотр отложен: в хабе ничего не играет и не видно. */
+    private val parked get() = menu.parkedTitle != null
+
     private val repeatMode get() = RepeatMode.entries.find { it.name == settings.repeatMode } ?: RepeatMode.Off
 
     private val queueModes get() = QueueModes(settings.shuffle, repeatMode, settings.autoplayNext)
@@ -89,6 +92,7 @@ class PlayerSession(
     override fun durationMs() = media.durationMs.coerceAtLeast(0)
 
     override fun togglePlayback() {
+        if (parked) return resumeViewing()
         if (currentIsImage) {
             // ⏯ у фото: включает слайд-шоу, если оно выключено, иначе ставит на паузу.
             if (!settings.slideshow) {
@@ -169,6 +173,40 @@ class PlayerSession(
     override fun hide() = panels.hide()
     override fun exit() = closePlayer()
 
+    /** Видео ставится на паузу и прячется, вокруг остаётся окружение. Центр не меняется: можно продолжить. */
+    override fun toHub() {
+        val title = menu.title
+        if (title != null) {
+            savePosition()
+            media.pause()
+            ticks.cancel(slideshowTick)
+            menu.parkedTitle = title
+            menu.title = null
+            scene.hasVideo = false
+        }
+        panels.showMenu(VrMenuState.Tab.Home)
+    }
+
+    override fun resumeViewing() {
+        val title = menu.parkedTitle ?: return
+        menu.parkedTitle = null
+        menu.title = title
+        scene.hasVideo = true
+        media.play()
+        if (currentIsImage) scheduleSlideshow()
+        panels.hide()
+    }
+
+    /** Нажали соседнее окно. Следующий файл открывается с тем же центром, как и по кнопке. */
+    fun openSide(slot: SideSlot) {
+        when (menu.sideCards?.get(slot)?.kind) {
+            SideKind.Previous -> previousFile()
+            SideKind.Next -> nextFile()
+            SideKind.Hub -> toHub()
+            null -> Unit
+        }
+    }
+
     /**
      * Видео открывается в том же направлении, что и предыдущее: смотрели вбок — центр не съезжает.
      * [fromMenu] — выбрано в меню: тогда видео встаёт там, где меню.
@@ -199,7 +237,7 @@ class PlayerSession(
                 item,
                 isCurrent = { playlist?.current == item },
                 onShown = ::scheduleSlideshow,
-                onFailed = { reason -> panels.showNotice("Не удалось открыть фото${reason?.let { ": $it" } ?: "."}") },
+                onFailed = { reason -> failed("Не удалось открыть фото${reason?.let { ": $it" } ?: "."}") },
             )
         } else {
             media.openVideo(item, afterImage = wasImage)
@@ -212,6 +250,7 @@ class PlayerSession(
         memory.opened(item)
         menu.isImage = item.isImage
         menu.title = item.title
+        menu.parkedTitle = null
         updateNavigation()
         menu.queue = next.items
         menu.queueIndex = next.index
@@ -239,12 +278,30 @@ class PlayerSession(
         }
     }
 
-    fun onPlaybackError(text: String) = panels.showNotice(text, VrMenuState.Tab.Home)
+    fun onPlaybackError(text: String) = failed(text)
+
+    /** Смотреть нечего: сообщение в хабе, продолжать тоже нечего. */
+    private fun failed(text: String) {
+        menu.title = null
+        menu.parkedTitle = null
+        scene.hasVideo = false
+        panels.showNotice(text, VrMenuState.Tab.Home)
+    }
 
     /** Плеер уходит с экрана. */
     fun onStop() {
         savePosition()
         media.pause()
+    }
+
+    /** Плеер снова на экране: видео ждёт нажатия, а фото оживает само. */
+    fun onStart() {
+        if (!parked && currentIsImage) media.play()
+    }
+
+    /** Отдельная кнопка «играть» на пульте: из хаба она возвращает к просмотру. */
+    fun playKey() {
+        if (parked) resumeViewing() else media.play()
     }
 
     private fun step(delta: Int) {
@@ -266,8 +323,21 @@ class PlayerSession(
 
     private fun updateNavigation() {
         if (playlist == null) return
-        menu.hasPrevious = neighbor(-1) != null
-        menu.hasNext = neighbor(1) != null
+        val previous = neighbor(-1)
+        val next = neighbor(1)
+        menu.hasPrevious = previous != null
+        menu.hasNext = next != null
+        // В случайном порядке следующий файл выбирается при переходе: заранее его не показать.
+        menu.sideCards = SideCards(
+            left = sideCard(SideKind.Previous, previous),
+            right = if (settings.shuffle && next != null) SideCard(SideKind.Next, "Случайный файл") else sideCard(SideKind.Next, next),
+        )
+    }
+
+    /** Некуда идти — окно ведёт в хаб. */
+    private fun sideCard(kind: SideKind, target: Playlist?): SideCard {
+        val item = target?.current ?: return SideCard(SideKind.Hub)
+        return SideCard(kind, item.title, item.thumbnail)
     }
 
     private fun applyFormat(format: VideoFormat) {

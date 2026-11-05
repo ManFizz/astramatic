@@ -42,7 +42,10 @@ interface VrScene {
     var hasVideo: Boolean
     fun recenter()
     fun centerOnPanel()
-    fun placePanelInFront()
+    fun placePanel(placement: PanelPlacement)
+
+    /** Соседнее окно под взглядом; null — взгляд не на нём. */
+    val hoverSide: SideSlot?
 }
 
 /** Отложенные задачи на главном потоке. Одна и та же задача не ставится повторно, снимается по ссылке. */

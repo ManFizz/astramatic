@@ -10,6 +10,7 @@ import kotlin.math.atan
 import kotlin.math.cos
 import kotlin.math.sin
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -123,7 +124,7 @@ class PanelTrackerTest {
     fun `hit point agrees with the matrices the renderer draws with`() {
         settle(yaw = 25f, pitch = 0f)
         prefs.recenterPitch = true
-        tracker.placePanelInFront()
+        tracker.placePanel(PanelPlacement.InFront)
         look(yaw = 25f, pitch = 15f)
         val yaw = 31f
         val pitch = 22f
@@ -148,7 +149,7 @@ class PanelTrackerTest {
     fun `angles for a panel point lead the gaze exactly there`() {
         settle(yaw = 25f)
         prefs.recenterPitch = true
-        tracker.placePanelInFront()
+        tracker.placePanel(PanelPlacement.InFront)
         look(yaw = 25f, pitch = 15f)
 
         val (yaw, pitch) = tracker.anglesForPanelPoint(320f, 200f)
@@ -411,22 +412,130 @@ class PanelTrackerTest {
         assertEquals(angleBefore, atan(tracker.panelW / 2 / -tracker.panelZ), 0.0001f)
     }
 
-    // --- VR-17: полоска догоняет взгляд ---------------------------------------------------------------
+    // --- VR-17: полоска стоит на месте, VR-22: открывается там, куда смотрят --------------------------
 
     @Test
-    fun `controls catch up with the gaze when you turn far away`() {
+    fun `controls stay where they opened when you turn away`() {
         tracker.layout = PanelLayout.Controls
         settle()
 
-        look(20f, frames = 60)
+        look(90f, frames = 200)
+
         assertEquals(0f, tracker.panelYawDeg, 0.01f)
+    }
 
-        look(60f, frames = 1)
-        val first = tracker.panelYawDeg
-        assertTrue(first > 0f && first < 10f, "мягко, а не рывком: $first°")
+    @Test
+    fun `controls open with their middle exactly where you look, up and down too`() {
+        tracker.layout = PanelLayout.Controls
+        settle()
 
-        look(60f, frames = 120)
-        assertTrue(abs(tracker.panelYawDeg - 60f) < 1f, "встаёт по центру: ${tracker.panelYawDeg}°")
+        tracker.placePanel(PanelPlacement.AtGaze)
+        look(yaw = 30f, pitch = -25f)
+
+        assertEquals(30f, tracker.panelYawDeg, 0.01f)
+        assertEquals(-25f, tracker.panelPitchDeg, 0.01f)
+        val gaze = assertNotNull(tracker.gaze)
+        assertEquals(PANEL_WIDTH_PX / 2f, gaze.x, 0.5f)
+        assertEquals(PanelLayout.Controls.visibleHeightPx / 2f, gaze.y, 0.5f)
+    }
+
+    @Test
+    fun `sheet keeps the bottom edge of the controls`() {
+        val controls = PanelLayout.Controls
+        val sheet = PanelLayout.ControlsSheet
+
+        assertEquals(controls.centerY - controls.height / 2, sheet.centerY - sheet.height / 2, 0.001f)
+    }
+
+    // --- VR-23: меню открывается на обычном центре --------------------------------------------------
+
+    @Test
+    fun `menu opens on the centre of the video, not where the press was`() {
+        settle()
+        tracker.placePanel(PanelPlacement.Center)
+        look(yaw = 20f, pitch = -30f)
+
+        assertEquals(0f, tracker.panelYawDeg, 0.01f)
+        assertEquals(0f, tracker.panelPitchDeg, 0.01f)
+    }
+
+    @Test
+    fun `menu opens at the recentred height when lying down`() {
+        prefs.recenterPitch = true
+        settle(yaw = 10f, pitch = 40f)
+        tracker.placePanel(PanelPlacement.Center)
+        look(yaw = 15f, pitch = 5f)
+
+        assertEquals(10f, tracker.panelYawDeg, 0.01f)
+        assertEquals(40f, tracker.panelPitchDeg, 0.01f)
+    }
+
+    @Test
+    fun `menu opens across from the gaze when looking far away from the centre`() {
+        settle()
+        tracker.placePanel(PanelPlacement.Center)
+        look(yaw = 120f, pitch = -30f)
+
+        assertEquals(120f, tracker.panelYawDeg, 0.01f)
+        assertEquals(0f, tracker.panelPitchDeg, 0.01f)
+    }
+
+    // --- PL-21: соседние окна -----------------------------------------------------------------------
+
+    @Test
+    fun `side windows appear past the screen edge and are found by the gaze`() {
+        val side = SideLayout.of(width = 3.5f, distance = 3f, curve = 0f)
+        tracker.sideLayout = side
+        settle()
+
+        look(0f)
+        assertFalse(tracker.sideWanted)
+        assertNull(tracker.hoverSide)
+
+        look(side.cardYawDeg)
+        assertTrue(tracker.sideWanted)
+        assertEquals(SideSlot.Left, tracker.hoverSide)
+
+        look(-side.cardYawDeg)
+        assertEquals(SideSlot.Right, tracker.hoverSide)
+
+        look(side.cardYawDeg, pitch = 40f)
+        assertNull(tracker.hoverSide)
+    }
+
+    @Test
+    fun `side windows move with the video centre`() {
+        val side = SideLayout.of(width = 3.5f, distance = 3f, curve = 0f)
+        tracker.sideLayout = side
+        settle(yaw = 50f)
+
+        look(50f + side.cardYawDeg)
+
+        assertEquals(SideSlot.Left, tracker.hoverSide)
+    }
+
+    @Test
+    fun `side windows show while the controls are open and yield to them`() {
+        val side = SideLayout.of(width = 3.5f, distance = 3f, curve = 0f)
+        tracker.sideLayout = side
+        tracker.layout = PanelLayout.Controls
+        tracker.panelVisible = true
+        settle()
+
+        look(0f)
+
+        assertTrue(tracker.sideWanted)
+        assertNotNull(tracker.gaze)
+        assertNull(tracker.hoverSide)
+    }
+
+    @Test
+    fun `curved screen is narrower than flat one seen from the same place`() {
+        val flat = SideLayout.of(width = 6f, distance = 3f, curve = 0f)
+        val curved = SideLayout.of(width = 6f, distance = 3f, curve = 1f)
+
+        assertEquals(45f, flat.screenHalfDeg, 0.01f)
+        assertTrue(curved.screenHalfDeg > flat.screenHalfDeg, "края изогнутого экрана ближе, угол больше")
     }
 
     @Test
@@ -435,15 +544,6 @@ class PanelTrackerTest {
         look(90f, frames = 120)
 
         assertEquals(0f, tracker.panelYawDeg, 0.01f)
-    }
-
-    @Test
-    fun `sheet over the controls follows too`() {
-        tracker.layout = PanelLayout.ControlsSheet
-        settle()
-        look(60f, frames = 120)
-
-        assertTrue(abs(tracker.panelYawDeg - 60f) < 1f)
     }
 
     // --- Центр видео: PL-04, PL-05, HS-07 ------------------------------------------------------------
@@ -479,7 +579,7 @@ class PanelTrackerTest {
     fun `file chosen in the menu starts where the menu is`() {
         settle()
         look(90f)
-        tracker.placePanelInFront()
+        tracker.placePanel(PanelPlacement.InFront)
         look(90f)
         look(120f)
 
@@ -492,7 +592,7 @@ class PanelTrackerTest {
     @Test
     fun `panel goes in front of the gaze when asked and the video does not move`() {
         settle()
-        tracker.placePanelInFront()
+        tracker.placePanel(PanelPlacement.InFront)
         look(50f)
 
         assertEquals(50f, tracker.panelYawDeg, 0.01f)

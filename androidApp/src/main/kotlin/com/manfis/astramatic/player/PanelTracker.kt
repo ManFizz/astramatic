@@ -2,6 +2,7 @@ package com.manfis.astramatic.player
 
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.math.abs
 import kotlin.math.asin
 import kotlin.math.atan2
@@ -33,17 +34,29 @@ const val PANEL_DISTANCE = 2.5f
 enum class PanelLayout(val visibleHeightPx: Int, val width: Float, val centerY: Float) {
     Menu(PANEL_HEIGHT_PX, 2.2f, 0f),
 
-    /** Полоска управления: верхние 360 px (240 dp при плотности панели), чуть ниже взгляда. */
-    Controls(360, 2.0f, -0.6f),
+    /** Полоска управления: верхние 360 px (240 dp при плотности панели), посередине — там, куда смотрели при нажатии. */
+    Controls(360, 2.0f, 0f),
 
     /**
      * Полоска с раскрытой над ней панелью (вид или очередь): 735 px = 240 + 250 dp.
-     * Нижний край — там же, где у простой полоски, панель растёт вверх, к взгляду.
+     * Нижний край — там же, где у простой полоски, панель растёт вверх.
      */
-    ControlsSheet(735, 2.0f, -0.307f);
+    ControlsSheet(735, 2.0f, 0.293f);
 
     val height: Float get() = width * visibleHeightPx / PANEL_WIDTH_PX
     val visibleFraction: Float get() = visibleHeightPx.toFloat() / PANEL_HEIGHT_PX
+}
+
+/** Куда поставить панель. */
+enum class PanelPlacement {
+    /** Перед глазами; наклон только в режиме «лёжа». */
+    InFront,
+
+    /** Точно туда, куда смотрят, в том числе вверх и вниз: так открывается полоска. */
+    AtGaze,
+
+    /** На центр видео, а если смотрят далеко в сторону — напротив взгляда, на высоте центра. Так открывается меню. */
+    Center,
 }
 
 /** Точка взгляда на панели в пикселях виртуального дисплея. */
@@ -71,7 +84,7 @@ class PanelTracker(
 ) {
     private val recenterRequested = AtomicBoolean(true)
     private val centerOnPanelRequested = AtomicBoolean(false)
-    private val placePanelRequested = AtomicBoolean(true)
+    private val placeRequested = AtomicReference<PanelPlacement?>(PanelPlacement.InFront)
 
     /**
      * Первые кадры после запуска трекинг головы ещё не определился с направлением. Пока он устаканивается,
@@ -138,7 +151,17 @@ class PanelTracker(
 
     /** Размер меню, пока его растягивают (и пока новый не записан в настройки); иначе NaN. */
     private var liveMenuSize = Float.NaN
-    private var controlsFollowing = false
+
+    /** Соседние окна плоского экрана этого кадра; null — их нет. */
+    @Volatile var sideLayout: SideLayout? = null
+
+    /** Соседнее окно под взглядом. Обновляется каждый кадр. */
+    @Volatile var hoverSide: SideSlot? = null
+        private set
+
+    /** Соседние окна должны быть видны: взгляд ушёл за край экрана или открыта полоска. */
+    var sideWanted = false
+        private set
 
     /**
      * Повернуть видео так, чтобы его центр оказался там, куда сейчас смотрит голова:
@@ -149,8 +172,8 @@ class PanelTracker(
     /** Повернуть видео к панели: файл выбран в меню — пусть начнётся там, где меню. */
     fun centerOnPanel() = centerOnPanelRequested.set(true)
 
-    /** Поставить панель перед взглядом. */
-    fun placePanelInFront() = placePanelRequested.set(true)
+    /** Поставить панель в следующем кадре. */
+    fun placePanel(placement: PanelPlacement) = placeRequested.set(placement)
 
     /** Новый кадр: взгляд [x], [y], [z] — единичный вектор в мире, вперёд — −Z. */
     fun update(x: Float, y: Float, z: Float) {
@@ -175,21 +198,13 @@ class PanelTracker(
                 videoYawDeg = lookYawDeg
                 videoPitchDeg = lookPitchDeg
             }
-            if (settling || placePanelRequested.getAndSet(false)) {
-                panelYawDeg = lookYawDeg
-                panelPitchDeg = lookPitchDeg
+            val placement = if (settling) PanelPlacement.InFront else placeRequested.getAndSet(null)
+            if (placement != null) {
+                place(placement, lookYawDeg, lookPitchDeg, truePitchDeg)
             } else if (activeHandle == Handle.Move) {
                 // Меню едет за взглядом, сохраняя, где за него взялись.
                 panelYawDeg = wrapDegrees(lookYawDeg + grabYawOffset)
                 panelPitchDeg = (truePitchDeg + grabPitchOffset).coerceIn(-MAX_MENU_PITCH, MAX_MENU_PITCH)
-            } else if (layout != PanelLayout.Menu) {
-                // Полоска мягко догоняет взгляд, если отвернуться от неё далеко в сторону, и встаёт по центру.
-                val diff = wrapDegrees(lookYawDeg - panelYawDeg)
-                if (abs(diff) > CONTROLS_FOLLOW_DEG) controlsFollowing = true
-                if (controlsFollowing) {
-                    panelYawDeg = wrapDegrees(panelYawDeg + diff * CONTROLS_FOLLOW_SPEED)
-                    if (abs(diff) < 1f) controlsFollowing = false
-                }
             }
         }
 
@@ -217,6 +232,45 @@ class PanelTracker(
             else -> Handle.None
         }
         gaze = if (interactive && activeHandle == Handle.None) computeGaze(layout) else null
+        updateSide(x, y, z, layout)
+    }
+
+    private fun place(placement: PanelPlacement, lookYawDeg: Float, lookPitchDeg: Float, truePitchDeg: Float) {
+        when (placement) {
+            PanelPlacement.InFront -> {
+                panelYawDeg = lookYawDeg
+                panelPitchDeg = lookPitchDeg
+            }
+            PanelPlacement.AtGaze -> {
+                panelYawDeg = lookYawDeg
+                panelPitchDeg = truePitchDeg.coerceIn(-MAX_MENU_PITCH, MAX_MENU_PITCH)
+            }
+            PanelPlacement.Center -> {
+                val nearCenter = abs(wrapDegrees(lookYawDeg - videoYawDeg)) <= MENU_CENTER_REACH_DEG
+                panelYawDeg = if (nearCenter) videoYawDeg else lookYawDeg
+                panelPitchDeg = videoPitchDeg
+            }
+        }
+    }
+
+    /** Взгляд в системе видео: видны ли соседние окна и на какое из них смотрят. */
+    private fun updateSide(x: Float, y: Float, z: Float, layout: PanelLayout) {
+        val side = sideLayout
+        if (side == null || settling) {
+            hoverSide = null
+            sideWanted = false
+            return
+        }
+        val yaw = Math.toRadians(videoYawDeg.toDouble())
+        val pitch = Math.toRadians(videoPitchDeg.toDouble())
+        val localX = (cos(yaw) * x - sin(yaw) * z).toFloat()
+        val turnedZ = sin(yaw) * x + cos(yaw) * z
+        val localY = (cos(pitch) * y + sin(pitch) * turnedZ).toFloat()
+        val localZ = (cos(pitch) * turnedZ - sin(pitch) * y).toFloat()
+        val relativeYaw = Math.toDegrees(atan2(-localX, -localZ).toDouble()).toFloat()
+        val pastEdge = abs(relativeYaw) > side.screenHalfDeg - SIDE_REVEAL_MARGIN_DEG
+        sideWanted = pastEdge || (panelVisible && layout != PanelLayout.Menu)
+        hoverSide = if (gaze != null || activeHandle != Handle.None) null else side.slotAt(localX, localY, localZ)
     }
 
     /**
@@ -346,10 +400,13 @@ class PanelTracker(
         /** Сколько кадров трекинг устаканивается после запуска. */
         const val SETTLE_FRAMES = 45
 
-        /** Полоска шириной ±20° от центра; дальше 30° — уже точно смотрят не на неё. */
-        private const val CONTROLS_FOLLOW_DEG = 30f
-        private const val CONTROLS_FOLLOW_SPEED = 0.08f
         private const val MAX_MENU_PITCH = 70f
+
+        /** Настолько в сторону от центра видео меню ещё открывается на центре, дальше — напротив взгляда. */
+        const val MENU_CENTER_REACH_DEG = 45f
+
+        /** Соседние окна проявляются, когда до края экрана остаётся столько градусов. */
+        private const val SIDE_REVEAL_MARGIN_DEG = 3f
 
         // Уголки и полоска-ручка, метры при базовом расстоянии меню (дальше меню — пропорционально больше).
         const val CORNER_OFFSET = 0.05f

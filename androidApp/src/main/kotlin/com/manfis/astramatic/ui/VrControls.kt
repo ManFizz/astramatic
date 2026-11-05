@@ -193,7 +193,7 @@ private fun ControlsBar(state: VrMenuState, actions: VrMenuActions) {
             Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.End)) {
                 SheetChip(state, VrMenuState.Sheet.Queue, "▤ Очередь")
                 SheetChip(state, VrMenuState.Sheet.View, "◐ Вид")
-                FilledTonalButton(onClick = { actions.openMenu(VrMenuState.Tab.Home) }, contentPadding = small) {
+                FilledTonalButton(onClick = actions::toHub, contentPadding = small) {
                     Text("🏠")
                 }
             }

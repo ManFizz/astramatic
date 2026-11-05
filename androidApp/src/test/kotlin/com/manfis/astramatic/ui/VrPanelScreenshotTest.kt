@@ -73,6 +73,8 @@ class VrPanelScreenshotTest {
         override fun playQueueItem(index: Int) = Unit
         override fun headsetSaved() = Unit
         override fun openMenu(tab: VrMenuState.Tab) = Unit
+        override fun toHub() = Unit
+        override fun resumeViewing() = Unit
         override fun hide() = Unit
         override fun exit() = Unit
     }
@@ -128,6 +130,13 @@ class VrPanelScreenshotTest {
 
     @Test
     fun homeWithVideoOpen() = shoot(PanelLayout.Menu, "vr_home_video_open", playing().apply { mode = VrMenuState.Mode.Menu })
+
+    @Test
+    fun hubWithParkedVideo() = shoot(
+        PanelLayout.Menu,
+        "vr_home_parked",
+        VrMenuState().apply { parkedTitle = "Очень длинное имя файла, которое не помещается на кнопке в одну строку, совсем никак_180_LR.mp4" },
+    )
 
     @Test
     fun notice() = shoot(

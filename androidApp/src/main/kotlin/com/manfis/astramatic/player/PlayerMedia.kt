@@ -1,6 +1,13 @@
 package com.manfis.astramatic.player
 
 import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.ImageDecoder
+import android.graphics.drawable.AnimatedImageDrawable
+import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import android.view.Surface
 import androidx.activity.ComponentActivity
 import androidx.annotation.OptIn
@@ -10,6 +17,8 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.VideoSize
 import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DataSourceUtil
+import androidx.media3.datasource.DataSpec
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import coil3.SingletonImageLoader
@@ -21,8 +30,11 @@ import coil3.toBitmap
 import com.manfis.astramatic.model.StereoLayout
 import com.manfis.astramatic.settings.AppSettings
 import com.manfis.astramatic.ui.describe
+import java.nio.ByteBuffer
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /** ExoPlayer и показ фото в поверхность кадра рендерера. */
 @OptIn(UnstableApi::class)
@@ -58,13 +70,23 @@ class PlayerMedia(
     private var image: Bitmap? = null
     private var imageJob: Job? = null
     private var showingImage = false
+    private var animation: ImageAnimation? = null
+    private val dataSources = AppDataSource.Factory(activity)
 
     override val isPlaying get() = player.isPlaying
     override val positionMs get() = player.currentPosition
     override val durationMs get() = player.duration
 
-    override fun play() = player.play()
-    override fun pause() = player.pause()
+    override fun play() {
+        animation?.start()
+        if (!showingImage) player.play()
+    }
+
+    override fun pause() {
+        animation?.stop()
+        player.pause()
+    }
+
     override fun seekTo(positionMs: Long) = player.seekTo(positionMs)
     override fun setSpeed(speed: Float) = player.setPlaybackSpeed(speed)
 
@@ -75,6 +97,7 @@ class PlayerMedia(
     }
 
     override fun openVideo(item: PlaylistItem, afterImage: Boolean) {
+        stopAnimation()
         showingImage = false
         image = null
         // После фото поверхность занята холстом — декодеру нужна свежая.
@@ -94,6 +117,14 @@ class PlayerMedia(
         player.clearVideoSurface()
         image = null
         imageJob = activity.lifecycleScope.launch {
+            val animated = if (AnimatedImages.mayAnimate(item.title)) decodeAnimated(item.uri) else null
+            if (animated != null) {
+                if (!isCurrent()) return@launch
+                renderer.newVideoSurface()?.let { videoSurface = it }
+                animation = ImageAnimation(animated).also { it.start() }
+                onShown()
+                return@launch
+            }
             val request = ImageRequest.Builder(activity)
                 .data(item.uri.toString())
                 .size(MAX_IMAGE_SIDE)
@@ -115,6 +146,26 @@ class PlayerMedia(
 
     override fun cancelImage() {
         imageJob?.cancel()
+        stopAnimation()
+    }
+
+    private fun stopAnimation() {
+        animation?.stop()
+        animation = null
+    }
+
+    /** Анимация из файла с любого источника, что и у видео. null — не анимация или прочитать не вышло: тогда как обычное фото. */
+    private suspend fun decodeAnimated(uri: Uri): AnimatedImageDrawable? = withContext(Dispatchers.IO) {
+        runCatching {
+            val source = dataSources.createDataSource()
+            val bytes = try {
+                source.open(DataSpec(uri))
+                DataSourceUtil.readToEnd(source)
+            } finally {
+                source.close()
+            }
+            ImageDecoder.decodeDrawable(ImageDecoder.createSource(ByteBuffer.wrap(bytes))) as? AnimatedImageDrawable
+        }.getOrNull()
     }
 
     private fun drawImage() {
@@ -124,6 +175,7 @@ class PlayerMedia(
         renderer.videoAspect = bitmap.width.toFloat() / bitmap.height
         runCatching {
             val canvas = surface.lockHardwareCanvas()
+            canvas.drawColor(Color.BLACK)
             canvas.drawBitmap(bitmap, 0f, 0f, null)
             surface.unlockCanvasAndPost(canvas)
         }
@@ -149,10 +201,61 @@ class PlayerMedia(
         return if (ratio in 1.8f..2.2f) "Готово: фото теперь вокруг вас." else "Готово, но это не панорама 2:1 — по краям будет растянуто."
     }
 
-    fun release() = player.release()
+    fun release() {
+        stopAnimation()
+        player.release()
+    }
+
+    /**
+     * Гифка и анимированный WebP: кадры рисуются программно в свой холст, а уже он — в поверхность кадра,
+     * дальше всё как у фото. На аппаратном холсте анимацией управляет система, и без окна она не идёт.
+     * Следующий кадр drawable выбирает сам по времени, поэтому достаточно перерисовывать его по таймеру.
+     */
+    private inner class ImageAnimation(private val drawable: AnimatedImageDrawable) {
+        private val handler = Handler(Looper.getMainLooper())
+        private val frame = Bitmap.createBitmap(
+            drawable.intrinsicWidth.coerceAtLeast(1), drawable.intrinsicHeight.coerceAtLeast(1), Bitmap.Config.ARGB_8888,
+        )
+        private val canvas = Canvas(frame)
+        private val tick = object : Runnable {
+            override fun run() {
+                frame.eraseColor(Color.TRANSPARENT)
+                drawable.draw(canvas)
+                image = frame
+                drawImage()
+                handler.postDelayed(this, FRAME_INTERVAL_MS)
+            }
+        }
+
+        init {
+            drawable.setBounds(0, 0, frame.width, frame.height)
+            drawable.repeatCount = AnimatedImageDrawable.REPEAT_INFINITE
+        }
+
+        fun start() {
+            drawable.start()
+            handler.removeCallbacks(tick)
+            tick.run()
+        }
+
+        fun stop() {
+            drawable.stop()
+            handler.removeCallbacks(tick)
+        }
+    }
 
     private companion object {
         /** Сторона фото не больше: 8K-панорама в памяти — уже около 130 МБ. */
         const val MAX_IMAGE_SIDE = 6144
+
+        /** Гифки редко быстрее 30 кадров в секунду. */
+        const val FRAME_INTERVAL_MS = 33L
     }
+}
+
+object AnimatedImages {
+    private val extensions = setOf("gif", "webp", "avif", "heic", "heif")
+
+    /** Может ли файл оказаться анимацией. Окончательно это видно только по содержимому. */
+    fun mayAnimate(name: String) = name.substringAfterLast('.', "").lowercase() in extensions
 }

@@ -6,6 +6,7 @@ import androidx.compose.runtime.setValue
 import com.manfis.astramatic.model.VideoFormat
 import com.manfis.astramatic.player.Playlist
 import com.manfis.astramatic.player.PlaylistItem
+import com.manfis.astramatic.player.SideCards
 import com.manfis.astramatic.settings.RemoteAction
 
 /** Состояние интерфейса плеера; живёт в активности, поэтому переживает переключение VR ⇄ 2D. */
@@ -21,6 +22,12 @@ class VrMenuState {
 
     /** Имя открытого видео, null — видео ещё не выбрано. */
     var title by mutableStateOf<String?>(null)
+
+    /** Что отложено при выходе в хаб: можно продолжить. null — отложенного нет. */
+    var parkedTitle by mutableStateOf<String?>(null)
+
+    /** Соседние окна плоского экрана. */
+    var sideCards by mutableStateOf<SideCards?>(null)
     var format by mutableStateOf(VideoFormat())
     var stereo by mutableStateOf(true)
 
@@ -85,6 +92,12 @@ interface VrMenuActions {
     fun playQueueItem(index: Int)
     fun headsetSaved()
     fun openMenu(tab: VrMenuState.Tab)
+
+    /** Выйти из просмотра в хаб. */
+    fun toHub()
+
+    /** Вернуться из хаба к отложенному просмотру. */
+    fun resumeViewing()
     fun hide()
     fun exit()
 }
