@@ -59,6 +59,7 @@ class RemoteInputTest {
             log += "recenter"
             scene.recenter()
         }
+        override fun recenterAfterCountdown() = Unit
         override fun setZoom(zoom: Float) {
             menu.zoom = zoom
         }
@@ -173,7 +174,8 @@ class RemoteInputTest {
         repeat(3) { keyDown(KeyEvent.KEYCODE_BUTTON_R1, repeat = it) }
         repeat(3) { keyDown(KeyEvent.KEYCODE_BUTTON_L1, repeat = it) }
 
-        assertEquals(30_000L, seekedMs)
+        // Первое нажатие — полный шаг, автоповтор — мельче.
+        assertEquals(15_000L, seekedMs)
         assertEquals(listOf("next"), log)
     }
 
@@ -484,7 +486,8 @@ class RemoteInputTest {
         stick(0.5f)
         time.advance(1_000)
 
-        assertEquals(-10_000f, seekedMs.toFloat(), 1_000f)
+        // Отклонение в квадрате: половина хода — четверть скорости, чтобы слегка отклонённым стиком мотать точно.
+        assertEquals(-5_000f, seekedMs.toFloat(), 1_000f)
     }
 
     @Test
@@ -498,23 +501,6 @@ class RemoteInputTest {
         time.advance(5_000)
 
         assertEquals(seeked, seekedMs)
-    }
-
-    /**
-     * Известное расхождение с RC-11, закреплено как есть: каждое событие оси сразу запускает лишний шаг,
-     * поэтому стик, шлющий события непрерывно, мотает быстрее обещанных 20 с/с. См. docs/scenarios/README.md.
-     */
-    @Test
-    fun `every axis event adds a step, so a noisy stick seeks faster than promised`() {
-        bindings.assignAxis(RemoteAction.AxisSeek, stickBinding)
-
-        repeat(20) {
-            stick(1f)
-            time.advance(50)
-        }
-        stick(0f)
-
-        assertEquals(40_000L, seekedMs)
     }
 
     @Test
@@ -647,11 +633,11 @@ class RemoteInputTest {
     }
 
     /**
-     * Другой путь к тому же симптому: многие геймпады шлют за один курок и кнопку, и ось.
-     * Рецентр на кнопке и «Нажатие» на оси того же курка считаются разными назначениями и срабатывают вместе.
+     * Рецентр на кнопке и «Нажатие» на оси того же курка считаются двумя кодами одной кнопки:
+     * срабатывает только рецентр. Раньше заодно открывалась полоска или нажималось то, на что смотрят.
      */
     @Test
-    fun `NAV-09 same trigger as a recenter key and a click axis opens the controls too`() {
+    fun `RC-21 recenter key and a click axis on the same trigger only recenter`() {
         bindings.assignKey(RemoteAction.Recenter, KeyEvent.KEYCODE_BUTTON_R2)
         bindings.assignAxis(RemoteAction.Click, AxisBinding(MotionEvent.AXIS_RTRIGGER, inverted = false))
         videoOpen()
@@ -663,8 +649,23 @@ class RemoteInputTest {
         trigger(0f)
 
         assertEquals(1, scene.recenters)
-        assertEquals(PanelPlace.Vr, host.place)
-        assertEquals(VrMenuState.Mode.Controls, menu.mode)
+        assertEquals(PanelPlace.Hidden, host.place)
+    }
+
+    @Test
+    fun `RC-21 axis coming first does not click either`() {
+        bindings.assignKey(RemoteAction.Recenter, KeyEvent.KEYCODE_BUTTON_R2)
+        bindings.assignAxis(RemoteAction.Click, AxisBinding(MotionEvent.AXIS_RTRIGGER, inverted = false))
+        videoOpen()
+
+        trigger(1f)
+        keyDown(KeyEvent.KEYCODE_BUTTON_R2)
+        time.advance(100)
+        trigger(0f)
+        keyUp(KeyEvent.KEYCODE_BUTTON_R2)
+
+        assertEquals(1, scene.recenters)
+        assertEquals(PanelPlace.Hidden, host.place)
     }
 
     @Test
@@ -691,5 +692,135 @@ class RemoteInputTest {
 
         assertTrue("toggleStereo" !in log)
         assertTrue("exit" !in log)
+    }
+
+    // --- Рецентр ничего не нажимает: RC-21 -------------------------------------------------------------
+
+    @Test
+    fun `recenter key does not press what is under the gaze`() {
+        bindings.assignKey(RemoteAction.Recenter, KeyEvent.KEYCODE_BUTTON_Y)
+        panels.showControls()
+        scene.gaze = Gaze(10f, 10f)
+
+        tap(KeyEvent.KEYCODE_BUTTON_Y)
+
+        assertEquals(listOf("recenter"), log)
+        assertTrue(host.touches.isEmpty())
+        assertTrue(host.keys.isEmpty())
+    }
+
+    @Test
+    fun `second code of the same button does not click`() {
+        bindings.assignKey(RemoteAction.Recenter, KeyEvent.KEYCODE_BUTTON_Y)
+        bindings.assignKey(RemoteAction.Click, KeyEvent.KEYCODE_BUTTON_A)
+        menu.title = "видео.mp4"
+        panels.showControls()
+        scene.gaze = Gaze(10f, 10f)
+
+        keyDown(KeyEvent.KEYCODE_BUTTON_Y)
+        keyDown(KeyEvent.KEYCODE_BUTTON_A)
+        time.advance(50)
+        keyUp(KeyEvent.KEYCODE_BUTTON_A)
+        keyUp(KeyEvent.KEYCODE_BUTTON_Y)
+
+        assertTrue(host.touches.isEmpty())
+    }
+
+    @Test
+    fun `unassigned OK sent with the recenter key does not reach the panel`() {
+        bindings.assignKey(RemoteAction.Recenter, KeyEvent.KEYCODE_BUTTON_Y)
+        panels.showControls()
+
+        keyDown(KeyEvent.KEYCODE_BUTTON_Y)
+
+        assertEquals(KeyRoute.Consumed, keyDown(KeyEvent.KEYCODE_DPAD_CENTER))
+        assertTrue(host.keys.isEmpty())
+    }
+
+    @Test
+    fun `click soon after recenter works again`() {
+        bindings.assignKey(RemoteAction.Recenter, KeyEvent.KEYCODE_BUTTON_Y)
+        bindings.assignKey(RemoteAction.Click, KeyEvent.KEYCODE_BUTTON_A)
+        menu.title = "видео.mp4"
+        panels.showControls()
+        scene.gaze = Gaze(10f, 10f)
+
+        tap(KeyEvent.KEYCODE_BUTTON_Y)
+        time.advance(500)
+        tap(KeyEvent.KEYCODE_BUTTON_A)
+
+        assertEquals(TouchPhase.Up, host.touches.last().first)
+    }
+
+    // --- Перемотка осью: RC-11 ----------------------------------------------------------------------------
+
+    @Test
+    fun `stick sending events all the time does not speed up the seek`() {
+        bindTrigger(RemoteAction.AxisSeek)
+
+        // Настоящий стик шлёт события чаще, чем идут шаги перемотки.
+        repeat(40) {
+            trigger(1f)
+            time.advance(10)
+        }
+        val steady = seekedMs
+        trigger(0f)
+        time.advance(200)
+
+        // 400 мс — это 8 шагов по секунде и один сразу.
+        assertTrue(steady in 8_000L..10_000L, "прошло $steady мс")
+    }
+
+    @Test
+    fun `stick held longer seeks faster`() {
+        bindTrigger(RemoteAction.AxisSeek)
+        trigger(1f)
+
+        time.advance(500)
+        val first = seekedMs
+        time.advance(1_500)
+        val second = seekedMs - first
+        time.advance(500)
+        val last = seekedMs - first - second
+
+        assertTrue(last > first * 3 / 2, "сначала $first, в конце $last")
+    }
+
+    @Test
+    fun `slight stick seeks finely`() {
+        bindTrigger(RemoteAction.AxisSeek)
+
+        trigger(0.5f)
+        time.advance(500)
+        val slight = seekedMs
+        trigger(0f)
+        time.advance(100)
+
+        seekedMs = 0
+        trigger(1f)
+        time.advance(500)
+
+        assertTrue(slight * 3 < seekedMs, "$slight против $seekedMs")
+    }
+
+    @Test
+    fun `held seek key takes smaller steps`() {
+        bindings.assignKey(RemoteAction.SeekForward, KeyEvent.KEYCODE_BUTTON_R1)
+
+        keyDown(KeyEvent.KEYCODE_BUTTON_R1)
+        assertEquals(10_000L, seekedMs)
+
+        keyDown(KeyEvent.KEYCODE_BUTTON_R1, repeat = 1)
+        assertEquals(12_500L, seekedMs)
+    }
+
+    @Test
+    fun `zoom keys stop on 100 percent`() {
+        bindings.assignKey(RemoteAction.ZoomOut, KeyEvent.KEYCODE_BUTTON_L1)
+        menu.zoom = 1.1f
+
+        tap(KeyEvent.KEYCODE_BUTTON_L1)
+
+        assertEquals(1f, menu.zoom)
     }
 }

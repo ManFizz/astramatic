@@ -22,6 +22,9 @@ interface MediaEngine {
     fun seekTo(positionMs: Long)
     fun setSpeed(speed: Float)
 
+    /** Идёт перемотка: важнее быстрая картинка, чем точный кадр и звук. */
+    fun setScrubbing(on: Boolean)
+
     /** Подготовить видео. [afterImage] — до него было фото, поверхность занята холстом. */
     fun openVideo(item: PlaylistItem, afterImage: Boolean)
 
@@ -70,6 +73,9 @@ class PlayerSession(
 
     private var playlist: Playlist? = null
     private var slideshowPaused = false
+    private val scrubber = SeekScrubber(media, ticks) { target, delta ->
+        scene.showHud(HudBar.seek(target, media.durationMs, delta))
+    }
 
     /** Что смотрели в этой папке, по порядку: по этому списку идёт ⏮ в случайном порядке. */
     private val watched = ArrayDeque<Int>()
@@ -88,7 +94,7 @@ class PlayerSession(
 
     // У фото «играет» — значит идёт слайд-шоу.
     override fun isPlaying() = if (currentIsImage) slideshowRunning() else media.isPlaying
-    override fun positionMs() = media.positionMs
+    override fun positionMs() = scrubber.target ?: media.positionMs
     override fun durationMs() = media.durationMs.coerceAtLeast(0)
 
     override fun togglePlayback() {
@@ -107,11 +113,13 @@ class PlayerSession(
         if (media.isPlaying) media.pause() else media.play()
     }
 
-    override fun seekTo(positionMs: Long) = media.seekTo(positionMs)
+    override fun seekTo(positionMs: Long) {
+        scrubber.cancel()
+        media.seekTo(positionMs)
+    }
 
     override fun seekBy(deltaMs: Long) {
-        val end = media.durationMs.takeIf { it > 0 } ?: Long.MAX_VALUE
-        media.seekTo((media.positionMs + deltaMs).coerceIn(0, end))
+        if (!currentIsImage) scrubber.by(deltaMs)
     }
 
     override fun setFormat(format: VideoFormat) {
@@ -128,8 +136,14 @@ class PlayerSession(
 
     override fun toggleStereo() = switchStereo()
     override fun recenter() = scene.recenter()
+    override fun recenterAfterCountdown() = panels.recenterAfterCountdown()
 
     override fun setZoom(zoom: Float) {
+        applyZoom(zoom)
+        scene.showHud(HudBar.zoom(menu.zoom))
+    }
+
+    private fun applyZoom(zoom: Float) {
         val value = zoom.coerceIn(MIN_ZOOM, MAX_ZOOM)
         menu.zoom = value
         scene.zoom = value
@@ -177,6 +191,7 @@ class PlayerSession(
     override fun toHub() {
         val title = menu.title
         if (title != null) {
+            scrubber.cancel()
             savePosition()
             media.pause()
             ticks.cancel(slideshowTick)
@@ -225,13 +240,14 @@ class PlayerSession(
     }
 
     private fun show(next: Playlist, fromMenu: Boolean = false) {
+        scrubber.cancel()
         savePosition()
         val wasImage = currentIsImage
         playlist = next
         val item = next.current
         ticks.cancel(slideshowTick)
         media.cancelImage()
-        setZoom(1f)
+        applyZoom(1f)
         if (item.isImage) {
             media.openImage(
                 item,
@@ -290,6 +306,7 @@ class PlayerSession(
 
     /** Плеер уходит с экрана. */
     fun onStop() {
+        scrubber.cancel()
         savePosition()
         media.pause()
     }

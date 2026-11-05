@@ -31,6 +31,8 @@ class PlayerSessionTest {
         override var positionMs = 0L
         override var durationMs = 600_000L
         var lastSpeed = 1f
+        var fastSeek = false
+        val seeks = mutableListOf<Long>()
         val opened = mutableListOf<PlaylistItem>()
         val openedAfterImage = mutableListOf<Boolean>()
         var imageResult: ((Boolean, String?) -> Unit)? = null
@@ -45,6 +47,10 @@ class PlayerSessionTest {
         }
         override fun seekTo(positionMs: Long) {
             this.positionMs = positionMs
+            seeks += positionMs
+        }
+        override fun setScrubbing(on: Boolean) {
+            fastSeek = on
         }
         override fun setSpeed(speed: Float) {
             lastSpeed = speed
@@ -558,10 +564,84 @@ class PlayerSessionTest {
 
         session.seekBy(-10_000)
         assertEquals(0L, media.positionMs)
+        time.advance(SeekScrubber.FINISH_AFTER_MS)
 
+        // До самого конца не доходит: иначе файл закончился бы и открылся следующий.
         media.positionMs = 595_000
         session.seekBy(10_000)
-        assertEquals(600_000L, media.positionMs)
+        assertEquals(599_000L, media.positionMs)
+    }
+
+    // --- Перемотка с пульта: PL-23, PL-24, RC-11 --------------------------------------------------------
+
+    @Test
+    fun `seek shows the target at once and does not flood the decoder`() {
+        session.open(folder())
+        media.positionMs = 100_000
+        media.seeks.clear()
+
+        repeat(20) {
+            session.seekBy(1_000)
+            assertEquals(100_000L + (it + 1) * 1_000, session.positionMs())
+            time.advance(50)
+        }
+
+        assertTrue(media.fastSeek)
+        assertTrue(media.seeks.size <= 7, "декодеру досталось ${media.seeks.size} шагов из 20")
+        assertTrue(media.seeks.size >= 3, "картинка должна двигаться: ${media.seeks.size}")
+        assertEquals(20, scene.huds.count { it.kind == HudBar.Kind.Seek })
+        assertEquals("▶▶ 20 с  ·  2:00 / 10:00", scene.huds.last().label)
+    }
+
+    @Test
+    fun `seek ends exactly on the target and the normal mode returns`() {
+        session.open(folder())
+        media.positionMs = 100_000
+        session.seekBy(1_000)
+        session.seekBy(1_000)
+
+        time.advance(SeekScrubber.FINISH_AFTER_MS)
+
+        assertEquals(102_000L, media.positionMs)
+        assertEquals(102_000L, media.seeks.last())
+        assertFalse(media.fastSeek)
+        assertEquals(102_000L, session.positionMs())
+    }
+
+    @Test
+    fun `opening another file stops the seek`() {
+        session.open(folder())
+        session.seekBy(10_000)
+
+        session.open(folder(1))
+        val after = media.seeks.size
+        time.advance(1_000)
+
+        assertFalse(media.fastSeek)
+        assertEquals(after, media.seeks.size)
+    }
+
+    @Test
+    fun `photo is not seeked`() {
+        session.open(photos())
+        media.seeks.clear()
+
+        session.seekBy(10_000)
+
+        assertTrue(media.seeks.isEmpty())
+        assertTrue(scene.huds.isEmpty())
+    }
+
+    @Test
+    fun `zoom shows the bar, a new file resets it silently`() {
+        session.open(folder())
+
+        session.setZoom(2f)
+        assertEquals("200%", scene.huds.single().label)
+
+        session.open(folder(1))
+        assertEquals(1f, menu.zoom)
+        assertEquals(1, scene.huds.size)
     }
 
     @Test

@@ -18,6 +18,32 @@ data class SideCards(val left: SideCard, val right: SideCard) {
     operator fun get(slot: SideSlot) = if (slot == SideSlot.Left) left else right
 }
 
+/** Куда соседние окна отодвинули от обычного места, градусы. Живёт, пока открыт плеер. */
+class SideOffsets {
+    private val yaws = FloatArray(2)
+    private val pitches = FloatArray(2)
+
+    fun yaw(slot: SideSlot) = yaws[slot.ordinal]
+    fun pitch(slot: SideSlot) = pitches[slot.ordinal]
+
+    fun set(slot: SideSlot, yaw: Float, pitch: Float) {
+        yaws[slot.ordinal] = yaw
+        pitches[slot.ordinal] = pitch
+    }
+}
+
+/** Плоский экран, чтобы найти его ручку: половина высоты и расстояние, метры. */
+data class ScreenGrip(val halfHeight: Float, val distance: Float) {
+    val y get() = -halfHeight - distance * SideLayout.GRIP_GAP_PER_DISTANCE
+    val width get() = distance * WIDTH_PER_DISTANCE
+    val reach get() = distance * REACH_PER_DISTANCE
+
+    private companion object {
+        const val WIDTH_PER_DISTANCE = 0.3f
+        const val REACH_PER_DISTANCE = 0.05f
+    }
+}
+
 /**
  * Где стоят соседние окна относительно плоского экрана: на той же глубине, сразу за его краями.
  * Углы и размеры — в системе видео, где вперёд — −Z, а влево — положительный поворот.
@@ -34,16 +60,41 @@ class SideLayout private constructor(
     /** Угол окна: левое — в положительную сторону. */
     fun yawOf(slot: SideSlot) = if (slot == SideSlot.Left) cardYawDeg else -cardYawDeg
 
-    /** На какое окно попадает взгляд [x], [y], [z], заданный в системе видео. */
-    fun slotAt(x: Float, y: Float, z: Float): SideSlot? = SideSlot.entries.firstOrNull { hits(it, x, y, z) }
+    /**
+     * На какое окно попадает взгляд [x], [y], [z], заданный относительно поворота экрана вокруг вертикали.
+     * [basePitch] — наклон экрана: окна стоят на его высоте.
+     */
+    fun slotAt(x: Float, y: Float, z: Float, moved: SideOffsets = SideOffsets(), basePitch: Float = 0f): SideSlot? =
+        SideSlot.entries.firstOrNull { slot ->
+            pointOn(slot, x, y, z, moved, basePitch)?.let { (px, py) -> abs(px) <= cardWidth / 2 && abs(py) <= cardHeight / 2 } == true
+        }
 
-    private fun hits(slot: SideSlot, x: Float, y: Float, z: Float): Boolean {
-        val yaw = Math.toRadians(yawOf(slot).toDouble())
-        val localX = (cos(yaw) * x - sin(yaw) * z).toFloat()
-        val localZ = (sin(yaw) * x + cos(yaw) * z).toFloat()
-        if (localZ > -0.01f) return false
+    /** На ручку какого окна попадает взгляд. */
+    fun gripAt(x: Float, y: Float, z: Float, moved: SideOffsets = SideOffsets(), basePitch: Float = 0f): SideSlot? =
+        SideSlot.entries.firstOrNull { slot ->
+            pointOn(slot, x, y, z, moved, basePitch)?.let { (px, py) ->
+                abs(px) <= gripWidth / 2 + gripReach && abs(py - gripY) <= gripReach
+            } == true
+        }
+
+    /** Ширина ручки под окном. */
+    val gripWidth get() = cardWidth * GRIP_WIDTH
+
+    /** Где ручка относительно центра окна. */
+    val gripY get() = -cardHeight / 2 - distance * GRIP_GAP_PER_DISTANCE
+    private val gripReach get() = distance * GRIP_REACH_PER_DISTANCE
+
+    /** Куда взгляд попадает на плоскости окна, метры от его центра; null — мимо плоскости. */
+    private fun pointOn(slot: SideSlot, x: Float, y: Float, z: Float, moved: SideOffsets, basePitch: Float): Pair<Float, Float>? {
+        val yaw = Math.toRadians((yawOf(slot) + moved.yaw(slot)).toDouble())
+        val pitch = Math.toRadians((basePitch + moved.pitch(slot)).toDouble())
+        val localX = cos(yaw) * x - sin(yaw) * z
+        val turnedZ = sin(yaw) * x + cos(yaw) * z
+        val localY = cos(pitch) * y + sin(pitch) * turnedZ
+        val localZ = cos(pitch) * turnedZ - sin(pitch) * y
+        if (localZ > -0.01) return null
         val t = -distance / localZ
-        return abs(localX * t) <= cardWidth / 2 && abs(y * t) <= cardHeight / 2
+        return (localX * t).toFloat() to (localY * t).toFloat()
     }
 
     companion object {
@@ -51,6 +102,10 @@ class SideLayout private constructor(
         private const val CARD_WIDTH_PER_DISTANCE = 0.5f
         private const val CARD_ASPECT = 1.6f
         private const val GAP_DEG = 3f
+        private const val GRIP_WIDTH = 0.3f
+        const val GRIP_GAP_PER_DISTANCE = 0.03f
+        const val GRIP_THICKNESS_PER_DISTANCE = 0.013f
+        private const val GRIP_REACH_PER_DISTANCE = 0.03f
 
         /** [width] — ширина экрана по дуге, [curve] — изгиб из настроек, как в [Meshes.screen]. */
         fun of(width: Float, distance: Float, curve: Float): SideLayout {

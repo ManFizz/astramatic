@@ -30,6 +30,22 @@ object GlUtil {
         return shader
     }
 
+    /** Нарисовать сетку: позиция и координаты текстуры в [positionAttr] и [uvAttr]. */
+    fun drawMesh(mesh: Mesh, positionAttr: Int, uvAttr: Int) {
+        val vertices = mesh.vertices
+        vertices.position(0)
+        GLES20.glVertexAttribPointer(positionAttr, 3, GLES20.GL_FLOAT, false, Mesh.STRIDE_BYTES, vertices)
+        GLES20.glEnableVertexAttribArray(positionAttr)
+        vertices.position(3)
+        GLES20.glVertexAttribPointer(uvAttr, 2, GLES20.GL_FLOAT, false, Mesh.STRIDE_BYTES, vertices)
+        GLES20.glEnableVertexAttribArray(uvAttr)
+
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, mesh.vertexCount)
+
+        GLES20.glDisableVertexAttribArray(positionAttr)
+        GLES20.glDisableVertexAttribArray(uvAttr)
+    }
+
     /** Текстура, в которую SurfaceTexture кладёт кадры декодера. */
     fun externalTexture(): Int {
         val ids = IntArray(1)

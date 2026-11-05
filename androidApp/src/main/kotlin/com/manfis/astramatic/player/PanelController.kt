@@ -32,6 +32,7 @@ class PanelController(
     private val press = PressTracker(host, scene, ticks)
     private val autoHide = ControlsAutoHide()
     private val dwell = DwellClick()
+    private var counting = false
 
     /** Большое меню: видео, файлы, шлем. */
     fun showMenu(tab: VrMenuState.Tab? = null) {
@@ -119,10 +120,41 @@ class PanelController(
     /** Кнопка Cardboard или действие «Нажатие» на пульте нажаты. */
     fun triggerDown(time: Long) = press.down(time)
 
+    /** Отменить нажатие, если оно идёт: кнопка под взглядом не сработает. */
+    fun cancelPress() {
+        press.up(clock(), cancelled = true)
+    }
+
+    /**
+     * Рецентр из интерфейса: панель уходит, идёт отсчёт, и центр встаёт туда, куда смотрят в конце.
+     * За секунду можно спокойно повернуть голову: взгляд не привязан к кнопке, которую нажимали.
+     */
+    fun recenterAfterCountdown() {
+        hide()
+        counting = true
+        scene.showRecenterRing(RECENTER_COUNTDOWN_MS)
+        ticks.cancel(recenterTick)
+        ticks.schedule(recenterTick, RECENTER_COUNTDOWN_MS)
+    }
+
+    private fun cancelCountdown() {
+        if (!counting) return
+        counting = false
+        ticks.cancel(recenterTick)
+        scene.showRecenterRing(null)
+    }
+
+    private val recenterTick = Runnable {
+        counting = false
+        scene.showRecenterRing(null)
+        scene.recenter()
+    }
+
     fun triggerUp(time: Long, cancelled: Boolean = false) {
         val tap = press.up(time, cancelled) ?: return
         val side = scene.hoverSide
         when {
+            tap == Tap.HeldOnPanel -> scene.recenter()
             tap == Tap.Short && side != null -> openSide(side)
             // Нажатие мимо панели закрывает её, если есть что смотреть, иначе возвращает панель перед глаза.
             host.place == PanelPlace.Vr -> if (menu.title != null) hide() else scene.placePanel(PanelPlacement.InFront)
@@ -145,6 +177,7 @@ class PanelController(
     }
 
     private fun showPanel(mode: VrMenuState.Mode) {
+        cancelCountdown()
         val menuAlreadyOpen = host.place == PanelPlace.Vr && menu.mode == VrMenuState.Mode.Menu
         menu.mode = mode
         if (mode == VrMenuState.Mode.Menu) menu.sheet = null
@@ -186,7 +219,7 @@ class PanelController(
     /** Полоска уходит сама, если идёт видео, а смотрят не на неё: панель не раскрыта, ничего не держат. */
     private fun autoHideControls(gaze: Gaze?): Boolean {
         val unattended = menu.mode == VrMenuState.Mode.Controls && menu.sheet == null &&
-            !press.pressedOnPanel && !press.grabbing && gaze == null && videoPlaying()
+            !press.pressedOnPanel && !press.grabbing && gaze == null && scene.hoverHandle == Handle.None && videoPlaying()
         if (!autoHide.shouldHide(clock(), unattended)) return false
         hide()
         return true
@@ -202,7 +235,8 @@ class PanelController(
         }
     }
 
-    private companion object {
-        const val HOVER_INTERVAL_MS = 50L
+    companion object {
+        private const val HOVER_INTERVAL_MS = 50L
+        const val RECENTER_COUNTDOWN_MS = 1_000L
     }
 }

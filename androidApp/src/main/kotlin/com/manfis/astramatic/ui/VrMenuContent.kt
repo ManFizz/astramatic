@@ -48,6 +48,7 @@ internal fun MenuContent(state: VrMenuState, actions: VrMenuActions) {
             }
         }
         val home = state.tab == VrMenuState.Tab.Home
+        val hub = state.showingHub
         // Из настроек при открытом видео «Главная» — это тоже выход в хаб.
         val goHome: () -> Unit = {
             if (state.title != null) {
@@ -56,7 +57,7 @@ internal fun MenuContent(state: VrMenuState, actions: VrMenuActions) {
                 state.tab = VrMenuState.Tab.Home
             }
         }
-        Row(
+        if (!hub) Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
@@ -92,9 +93,9 @@ internal fun MenuContent(state: VrMenuState, actions: VrMenuActions) {
                 TextButton(onClick = actions::exit) { Text("Выход") }
             }
         }
-        HorizontalDivider()
+        if (!hub) HorizontalDivider()
         val parked = state.parkedTitle
-        if (home && parked != null) {
+        if (!hub && home && parked != null) {
             Button(
                 onClick = actions::resumeViewing,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
@@ -109,6 +110,18 @@ internal fun MenuContent(state: VrMenuState, actions: VrMenuActions) {
                     state = state.library,
                     embedded = true,
                     allowEditing = !state.stereo,
+                    hub = if (state.stereo) {
+                        HubChrome(
+                            parkedTitle = parked,
+                            videoOpen = state.title != null,
+                            onResume = actions::resumeViewing,
+                            onToVideo = actions::hide,
+                            onFormat = { state.tab = VrMenuState.Tab.Video },
+                            onSettings = { state.tab = VrMenuState.Tab.Settings },
+                        )
+                    } else {
+                        null
+                    },
                 )
                 VrMenuState.Tab.Video -> VideoTab(state, actions)
                 VrMenuState.Tab.Headset -> HeadsetScreen(

@@ -163,6 +163,12 @@ class VrRenderer(
     private val panelEyeView = FloatArray(16)
     private val sideEyeView = FloatArray(16)
 
+    private val hud = HudLayer()
+    private val hudView = FloatArray(16)
+    private var frameDt = 0f
+    private val screenBase = FloatArray(16)
+    private val sideBase = FloatArray(16)
+
     private val depth = PanelDepth()
     private var depthProbeAt = 0L
     private var probeFramebuffer = 0
@@ -206,7 +212,12 @@ class VrRenderer(
     override fun recenter() {
         recenterCount++
         tracker.recenter()
+        hud.flash()
     }
+
+    override fun showHud(bar: HudBar) = hud.show(bar)
+
+    override fun showRecenterRing(durationMs: Long?) = hud.ring(durationMs)
 
     /** Повернуть видео к панели: файл выбран в меню — пусть начнётся там, где меню. */
     override fun centerOnPanel() = tracker.centerOnPanel()
@@ -256,6 +267,7 @@ class VrRenderer(
         GLES20.glGenTextures(2, sideTextures, 0)
         sideUploaded = null
         createProbe()
+        hud.create()
 
         environment.create()
 
@@ -272,12 +284,15 @@ class VrRenderer(
         headTransform.getHeadView(headView, 0)
         if (!(BuildConfig.DEBUG && applyDebugLook())) correctDrift()
         tracker.sideLayout = currentSideLayout()
+        tracker.screenGrip = currentScreenGrip()
         // Направление взгляда в мире: третья строка матрицы вида со знаком минус.
         tracker.update(-headView[2], -headView[6], -headView[10])
 
         updateVideoModel(format)
         val layout = panelLayout
         updateAppear(layout)
+        depth.step(frameDt)
+        hud.advance(frameDt)
         Matrix.setRotateM(panelRotation, 0, tracker.panelYawDeg, 0f, 1f, 0f)
         if (tracker.panelPitchDeg != 0f) Matrix.rotateM(panelRotation, 0, tracker.panelPitchDeg, 1f, 0f, 0f)
         // Появляясь, панель чуть «подплывает»: из 97% размера в 100%.
@@ -299,6 +314,7 @@ class VrRenderer(
         val now = System.nanoTime()
         val dt = if (lastFrameNanos == 0L) 0f else ((now - lastFrameNanos) / 1e9f).coerceAtMost(0.1f)
         lastFrameNanos = now
+        frameDt = dt
         // Смена раскладки (полоска ⇄ меню) — короткое проявление заново, без мигания в ноль.
         if (layout != lastLayout) {
             lastLayout = layout
@@ -357,6 +373,7 @@ class VrRenderer(
         drawEnvironment(eye)
         if (hasVideo && !calibration) drawVideo(eye, zoomed)
         drawSideCards(eye)
+        drawScreenGrip(eye)
 
         if (panelVisible && panel.isReady && !settling) {
             fillDepthView(eye, -tracker.panelZ, panelEyeView)
@@ -374,17 +391,57 @@ class VrRenderer(
             drawPrepared(panel, quad, setUvRect = false)
             GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
             val handle = hoverHandle
-            if (panelLayout == PanelLayout.Menu && (gaze != null || handle != Handle.None)) drawHandles(eye, projection, handle)
-            if (gaze != null || handle != Handle.None) drawCursor(eye, projection)
+            val onPanel = gaze != null || handle.resizes || handle == Handle.Move
+            if (onPanel) drawHandles(projection, handle)
+            if (onPanel) drawCursor(eye, projection)
             GLES20.glDisable(GLES20.GL_BLEND)
         }
+        drawHud(eye, projection)
+    }
+
+    /** То, что движется с головой. Глаза сводятся как на видео, поэтому при взгляде на него не двоится. */
+    private fun drawHud(eye: CardboardView.Eye, projection: FloatArray) {
+        Matrix.setIdentityM(hudView, 0)
+        val eyeFromHead = eye.eyeFromHead
+        val scale = depthScale(eye, HudLayer.DISTANCE)
+        hudView[12] = eyeFromHead[12] * scale
+        hudView[13] = eyeFromHead[13] * scale
+        hudView[14] = eyeFromHead[14] * scale
+        GLES20.glEnable(GLES20.GL_BLEND)
+        hud.draw(hudView, projection)
+        GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
+        GLES20.glDisable(GLES20.GL_BLEND)
+    }
+
+    /** Плоский экран можно взять за ручку под ним. При приближении её положение не совпало бы со взглядом. */
+    private fun currentScreenGrip(): ScreenGrip? {
+        val format = format
+        if (!hasVideo || calibration || !stereoView || format.projection != Projection.Flat || zoom != 1f) return null
+        return ScreenGrip(settings.screenHeight / 2, settings.screenDistance)
+    }
+
+    private fun drawScreenGrip(eye: CardboardView.Eye) {
+        val grip = tracker.screenGrip ?: return
+        val active = tracker.hoverHandle == Handle.Screen
+        if (!active && !tracker.screenGripWanted) return
+        fillDepthView(eye, grip.distance, sideEyeView)
+        Matrix.setRotateM(screenBase, 0, tracker.videoYawDeg, 0f, 1f, 0f)
+        val pitch = tracker.screenPitchDeg
+        if (pitch != 0f) Matrix.rotateM(screenBase, 0, pitch, 1f, 0f, 0f)
+        GLES20.glEnable(GLES20.GL_BLEND)
+        GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
+        GLES20.glUseProgram(shapeProgram)
+        val alpha = if (active) HANDLE_ACTIVE_ALPHA else HANDLE_IDLE_ALPHA
+        val thickness = grip.distance * SideLayout.GRIP_THICKNESS_PER_DISTANCE
+        drawShape(zoomed, screenBase, sideEyeView, 0f, grip.y, -grip.distance, grip.width, thickness, alpha)
+        GLES20.glDisable(GLES20.GL_BLEND)
     }
 
     /**
      * Уголки-скобки снаружи углов меню и полоска-ручка под ним. Видны, пока смотрят на меню;
      * то, что под взглядом или в руке, — ярче.
      */
-    private fun drawHandles(eye: CardboardView.Eye, projection: FloatArray, hovered: Handle) {
+    private fun drawHandles(projection: FloatArray, hovered: Handle) {
         GLES20.glUseProgram(shapeProgram)
         val s = tracker.panelScale
         val fade = ease(appear)
@@ -399,24 +456,36 @@ class VrRenderer(
             Handle.TopLeft to (-1f to 1f), Handle.TopRight to (1f to 1f),
             Handle.BottomLeft to (-1f to -1f), Handle.BottomRight to (1f to -1f),
         )
+        val z = tracker.panelZ + CURSOR_LIFT * s / 2
         for ((handle, signs) in corners) {
+            if (panelLayout != PanelLayout.Menu) break
             val (sx, sy) = signs
             val alpha = (if (hovered == handle) HANDLE_ACTIVE_ALPHA else HANDLE_IDLE_ALPHA) * fade
             val px = sx * (halfW + out)
             val py = panelCy + sy * (halfH + out)
             // Буква «Г» в каждом углу: плечо вдоль края и плечо вниз/вверх.
-            drawShape(eye, projection, px - sx * (arm - thick) / 2, py, arm, thick, alpha)
-            drawShape(eye, projection, px, py - sy * (arm - thick) / 2, thick, arm, alpha)
+            drawShape(projection, panelRotation, panelEyeView, px - sx * (arm - thick) / 2, py, z, arm, thick, alpha)
+            drawShape(projection, panelRotation, panelEyeView, px, py - sy * (arm - thick) / 2, z, thick, arm, alpha)
         }
         val barAlpha = (if (hovered == Handle.Move) HANDLE_ACTIVE_ALPHA else HANDLE_IDLE_ALPHA) * fade
-        drawShape(eye, projection, 0f, panelCy - halfH - PanelTracker.BAR_GAP * s, panelW * PanelTracker.BAR_WIDTH, thick * 1.4f, barAlpha)
+        drawShape(projection, panelRotation, panelEyeView, 0f, panelCy - halfH - PanelTracker.BAR_GAP * s, z, panelW * PanelTracker.BAR_WIDTH, thick * 1.4f, barAlpha)
     }
 
-    /** Скруглённая белая плашка на плоскости панели: центр и размер в метрах. */
-    private fun drawShape(eye: CardboardView.Eye, projection: FloatArray, cx: Float, cy: Float, w: Float, h: Float, alpha: Float) {
-        Matrix.translateM(shapeModel, 0, panelRotation, 0, cx, cy, tracker.panelZ + CURSOR_LIFT * tracker.panelScale / 2)
+    /** Скруглённая белая плашка: [base] — поворот окна, [eyeView] — вид глаза, центр и размер в метрах. */
+    private fun drawShape(
+        projection: FloatArray,
+        base: FloatArray,
+        eyeView: FloatArray,
+        cx: Float,
+        cy: Float,
+        z: Float,
+        w: Float,
+        h: Float,
+        alpha: Float,
+    ) {
+        Matrix.translateM(shapeModel, 0, base, 0, cx, cy, z)
         Matrix.scaleM(shapeModel, 0, w, h, 1f)
-        Matrix.multiplyMM(viewModel, 0, panelEyeView, 0, shapeModel, 0)
+        Matrix.multiplyMM(viewModel, 0, eyeView, 0, shapeModel, 0)
         Matrix.multiplyMM(mvp, 0, projection, 0, viewModel, 0)
         GLES20.glUniformMatrix4fv(shapeMvp, 1, false, mvp, 0)
         GLES20.glUniform2f(shapeSize, w, h)
@@ -523,18 +592,23 @@ class VrRenderer(
      */
     private fun fillDepthView(eye: CardboardView.Eye, distance: Float, out: FloatArray) {
         eye.eyeView.copyInto(out)
+        val scale = depthScale(eye, distance)
+        out[12] *= scale
+        out[13] *= scale
+        out[14] *= scale
+    }
+
+    /** Во сколько раз изменить сдвиг глаз для предмета на расстоянии [distance]. */
+    private fun depthScale(eye: CardboardView.Eye, distance: Float): Float {
         val eyeOffset = abs(eye.eyeFromHead[12])
-        if (!settings.menuDepthAuto || eyeOffset < 0.0001f) return
+        if (!settings.menuDepthAuto || eyeOffset < 0.0001f) return 1f
         val eyeSeparation = 2 * eyeOffset
         val onVideo = hasVideo && !calibration
         // Окружение и сфера — на бесконечности, плоский экран — на своём расстоянии, стерео добавляет сдвиг из кадра.
         val geometric = if (onVideo && format.projection == Projection.Flat) eyeSeparation / settings.screenDistance else 0f
         val measured = if (onVideo && format.stereo != StereoLayout.Mono) depth.radians else 0f
         val vergence = ((geometric + measured) * zoom).coerceAtLeast(0f)
-        val scale = vergence * distance / eyeSeparation
-        out[12] *= scale
-        out[13] *= scale
-        out[14] *= scale
+        return vergence * distance / eyeSeparation
     }
 
     private fun eyeAspect(format: VideoFormat) = when (format.stereo) {
@@ -546,7 +620,8 @@ class VrRenderer(
     /** Соседние окна есть у плоского экрана в шлеме. Пересчитываются, только когда меняется сам экран. */
     private fun currentSideLayout(): SideLayout? {
         val format = format
-        if (sideImages == null || !hasVideo || calibration || !stereoView || format.projection != Projection.Flat) return null
+        // При приближении положение окон не совпало бы со взглядом, да и экран тогда занимает всё поле зрения.
+        if (sideImages == null || !hasVideo || calibration || !stereoView || format.projection != Projection.Flat || zoom != 1f) return null
         val key = listOf(settings.screenHeight * eyeAspect(format), settings.screenDistance, settings.screenCurve)
         if (key != sideLayoutKey) {
             sideLayoutKey = key
@@ -572,10 +647,8 @@ class VrRenderer(
         for (slot in SideSlot.entries) {
             val hovered = tracker.hoverSide == slot
             val grow = if (hovered) SIDE_HOVER_SCALE else 1f
-            Matrix.setRotateM(sideModel, 0, tracker.videoYawDeg, 0f, 1f, 0f)
-            if (tracker.videoPitchDeg != 0f) Matrix.rotateM(sideModel, 0, tracker.videoPitchDeg, 1f, 0f, 0f)
-            Matrix.rotateM(sideModel, 0, side.yawOf(slot), 0f, 1f, 0f)
-            Matrix.translateM(sideModel, 0, 0f, 0f, -side.distance)
+            fillSideBase(side, slot)
+            Matrix.translateM(sideModel, 0, sideBase, 0, 0f, 0f, -side.distance)
             Matrix.scaleM(sideModel, 0, side.cardWidth * grow, side.cardHeight * grow, 1f)
             Matrix.multiplyMM(viewModel, 0, sideEyeView, 0, sideModel, 0)
             Matrix.multiplyMM(mvp, 0, zoomed, 0, viewModel, 0)
@@ -584,7 +657,24 @@ class VrRenderer(
             GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, sideTextures[slot.ordinal])
             drawMesh(quad, sidePosition, sideUv)
         }
+        // Ручки окон — поверх: за них окна и перетаскиваются.
+        GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
+        GLES20.glUseProgram(shapeProgram)
+        val thickness = side.distance * SideLayout.GRIP_THICKNESS_PER_DISTANCE
+        for (slot in SideSlot.entries) {
+            val active = tracker.hoverHandle.side == slot
+            fillSideBase(side, slot)
+            val alpha = sideAlpha * (if (active) HANDLE_ACTIVE_ALPHA else HANDLE_IDLE_ALPHA)
+            drawShape(zoomed, sideBase, sideEyeView, 0f, side.gripY, -side.distance, side.gripWidth, thickness, alpha)
+        }
         GLES20.glDisable(GLES20.GL_BLEND)
+    }
+
+    /** Поворот соседнего окна: вместе с экраном, плюс куда его отодвинули. */
+    private fun fillSideBase(side: SideLayout, slot: SideSlot) {
+        Matrix.setRotateM(sideBase, 0, tracker.videoYawDeg + side.yawOf(slot) + tracker.sideOffsets.yaw(slot), 0f, 1f, 0f)
+        val pitch = tracker.screenPitchDeg + tracker.sideOffsets.pitch(slot)
+        if (pitch != 0f) Matrix.rotateM(sideBase, 0, pitch, 1f, 0f, 0f)
     }
 
     private fun uploadSide(texture: Int, bitmap: Bitmap) {
@@ -629,7 +719,8 @@ class VrRenderer(
             return
         }
         val now = SystemClock.uptimeMillis()
-        if (depth.measured && now - depthProbeAt < PROBE_INTERVAL_MS) return
+        val interval = if (depth.wantsQuickSample) PROBE_QUICK_INTERVAL_MS else PROBE_INTERVAL_MS
+        if (now - depthProbeAt < interval) return
         depthProbeAt = now
 
         val framebuffer = IntArray(1)
@@ -685,29 +776,17 @@ class VrRenderer(
         drawMesh(quad, cursorPosition, cursorUv)
     }
 
-    private fun drawMesh(mesh: Mesh, positionAttr: Int, uvAttr: Int) {
-        val vertices = mesh.vertices
-        vertices.position(0)
-        GLES20.glVertexAttribPointer(positionAttr, 3, GLES20.GL_FLOAT, false, Mesh.STRIDE_BYTES, vertices)
-        GLES20.glEnableVertexAttribArray(positionAttr)
-        vertices.position(3)
-        GLES20.glVertexAttribPointer(uvAttr, 2, GLES20.GL_FLOAT, false, Mesh.STRIDE_BYTES, vertices)
-        GLES20.glEnableVertexAttribArray(uvAttr)
-
-        GLES20.glDrawArrays(GLES20.GL_TRIANGLES, 0, mesh.vertexCount)
-
-        GLES20.glDisableVertexAttribArray(positionAttr)
-        GLES20.glDisableVertexAttribArray(uvAttr)
-    }
+    private fun drawMesh(mesh: Mesh, positionAttr: Int, uvAttr: Int) = GlUtil.drawMesh(mesh, positionAttr, uvAttr)
 
     override fun onFinishFrame(viewport: Viewport) = Unit
 
     override fun onRendererShutdown() = release()
 
-    /** Плоский экран уже в метрах (см. [flatScreen]), здесь только поворот: рецентр и наклон. */
+    /** Плоский экран уже в метрах (см. [flatScreen]), здесь только поворот: рецентр, наклон и подъём ручкой. */
     private fun updateVideoModel(format: VideoFormat) {
         Matrix.setRotateM(videoModel, 0, tracker.videoYawDeg, 0f, 1f, 0f)
-        if (tracker.videoPitchDeg != 0f) Matrix.rotateM(videoModel, 0, tracker.videoPitchDeg, 1f, 0f, 0f)
+        val pitch = tracker.videoPitchDeg + if (format.projection == Projection.Flat) tracker.screenLiftDeg else 0f
+        if (pitch != 0f) Matrix.rotateM(videoModel, 0, pitch, 1f, 0f, 0f)
         if (format.tiltDeg != 0) Matrix.rotateM(videoModel, 0, format.tiltDeg.toFloat(), 1f, 0f, 0f)
     }
 
@@ -806,7 +885,8 @@ class VrRenderer(
         private const val PROBE_FOV_Y_DEG = 28f
         private const val PROBE_MIN_SHIFT = -3
         private const val PROBE_MAX_SHIFT = 18
-        private const val PROBE_INTERVAL_MS = 250L
+        private const val PROBE_INTERVAL_MS = 700L
+        private const val PROBE_QUICK_INTERVAL_MS = 50L
 
         private const val SIDE_FRAGMENT_SHADER = """
 precision mediump float;

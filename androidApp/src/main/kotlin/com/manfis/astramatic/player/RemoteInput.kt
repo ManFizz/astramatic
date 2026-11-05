@@ -53,6 +53,11 @@ class RemoteInput(
     /** Оси, нажатые как кнопки; только что назначенные не срабатывают, пока их не отпустят. */
     private val axisPressed = HashSet<AxisBinding>()
     private val axisSuppressed = HashSet<AxisBinding>()
+    private val zoomDetent = ZoomDetent(clock)
+    private var recenterAt = Long.MIN_VALUE / 2
+    private var clickSuppressed = false
+    private var axisTicking = false
+    private var seekHeldTicks = 0
     private var navX = 0
     private var navY = 0
 
@@ -77,16 +82,18 @@ class RemoteInput(
         val action = bindings.actionFor(keyCode)
         if (action != null) {
             if (action == RemoteAction.Click) {
-                if (down && repeatCount == 0) panels.triggerDown(time)
-                if (!down) panels.triggerUp(time, cancelled = false)
+                if (down && repeatCount == 0) clickDown(time)
+                if (!down) clickUp(time)
             } else if (down && (repeatCount == 0 || action in REPEATABLE)) {
-                perform(action)
+                perform(action, held = repeatCount > 0)
             }
             return KeyRoute.Consumed
         }
 
         // Не назначенные стрелки и OK ходят по меню в шлеме (на экране — сами, как обычно).
         if (host.place == PanelPlace.Vr) {
+            // Пульт может прислать на одну кнопку два кода, например рецентр и OK. Такой OK ничего не нажимает.
+            if (keyCode in OK_KEYS && clock() - recenterAt < SAME_PRESS_MS) return KeyRoute.Consumed
             when (keyCode) {
                 KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN,
                 KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
@@ -197,18 +204,30 @@ class RemoteInput(
             navY = y
             if (y != 0) panels.navKey(if (y < 0) KeyEvent.KEYCODE_DPAD_UP else KeyEvent.KEYCODE_DPAD_DOWN)
         }
-        // Прокрутка и перемотка — плавно, пока ось отклонена.
-        ticks.cancel(axisTick)
-        if (SMOOTH_AXES.any { abs(axisValue(it)) > DEAD_ZONE }) ticks.schedule(axisTick)
+        // Прокрутка и перемотка — плавно, пока ось отклонена. Шаг задаёт таймер, а не события оси:
+        // стик, который шлёт их непрерывно, иначе мотал бы быстрее и рвал бы картинку.
+        if (!axisTicking && SMOOTH_AXES.any { abs(axisValue(it)) > DEAD_ZONE }) {
+            axisTicking = true
+            ticks.schedule(axisTick)
+        }
     }
 
     private fun axisButton(action: RemoteAction, down: Boolean) {
         val now = clock()
         if (action == RemoteAction.Click) {
-            if (down) panels.triggerDown(now) else panels.triggerUp(now, cancelled = false)
+            if (down) clickDown(now) else clickUp(now)
         } else if (down) {
             perform(action)
         }
+    }
+
+    private fun clickDown(time: Long) {
+        clickSuppressed = time - recenterAt < SAME_PRESS_MS
+        if (!clickSuppressed) panels.triggerDown(time)
+    }
+
+    private fun clickUp(time: Long) {
+        if (clickSuppressed) clickSuppressed = false else panels.triggerUp(time, cancelled = false)
     }
 
     private fun direction(value: Float) = when {
@@ -223,31 +242,52 @@ class RemoteInput(
             val seek = axisValue(RemoteAction.AxisSeek)
             val zoom = axisValue(RemoteAction.AxisZoom)
             // Вверх по стику (назначен «вверх») — приблизить, плавно, примерно вдвое за секунду.
-            if (abs(zoom) > DEAD_ZONE) actions.setZoom(menu.zoom * (1f + zoom * AXIS_ZOOM_PER_TICK))
+            if (abs(zoom) > DEAD_ZONE) setZoom(menu.zoom * (1f + zoom * AXIS_ZOOM_PER_TICK))
             // Стик вниз (плюс) прокручивает вниз — как колесо от себя.
             if (abs(scroll) > DEAD_ZONE) panels.scroll(-scroll * AXIS_SCROLL_PER_TICK)
-            if (abs(seek) > DEAD_ZONE) actions.seekBy((seek * AXIS_SEEK_MS_PER_TICK).toLong())
-            if (abs(scroll) > DEAD_ZONE || abs(seek) > DEAD_ZONE || abs(zoom) > DEAD_ZONE) ticks.schedule(this, AXIS_TICK_MS)
+            if (abs(seek) > DEAD_ZONE) {
+                // Лёгкое отклонение — точно, полное и долгое — быстро: длинный файл так проходится за секунды.
+                val speedUp = (1f + (seekHeldTicks - AXIS_SEEK_STEADY_TICKS).coerceAtLeast(0) / AXIS_SEEK_TICKS_TO_DOUBLE)
+                    .coerceAtMost(AXIS_SEEK_MAX_SPEED_UP)
+                actions.seekBy((seek * abs(seek) * AXIS_SEEK_MS_PER_TICK * speedUp).toLong())
+                seekHeldTicks++
+            } else {
+                seekHeldTicks = 0
+            }
+            if (abs(scroll) > DEAD_ZONE || abs(seek) > DEAD_ZONE || abs(zoom) > DEAD_ZONE) {
+                ticks.schedule(this, AXIS_TICK_MS)
+            } else {
+                axisTicking = false
+            }
         }
     }
 
-    private fun perform(action: RemoteAction) {
+    private fun setZoom(wanted: Float) = actions.setZoom(zoomDetent.next(menu.zoom, wanted))
+
+    /** [held] — кнопку держат: шаг мельче, иначе автоповтор проскакивал бы минуты за секунду. */
+    private fun perform(action: RemoteAction, held: Boolean = false) {
+        val seekStep = if (held) HELD_SEEK_DIVIDER else 1L
         when (action) {
             RemoteAction.Click -> Unit
             RemoteAction.Back -> systemBack()
             RemoteAction.Controls -> panels.cycleControls()
             RemoteAction.PlayPause -> actions.togglePlayback()
-            RemoteAction.SeekBack -> actions.seekBy(-SEEK_STEP_MS)
-            RemoteAction.SeekForward -> actions.seekBy(SEEK_STEP_MS)
-            RemoteAction.SeekBackLong -> actions.seekBy(-LONG_SEEK_STEP_MS)
-            RemoteAction.SeekForwardLong -> actions.seekBy(LONG_SEEK_STEP_MS)
+            RemoteAction.SeekBack -> actions.seekBy(-SEEK_STEP_MS / seekStep)
+            RemoteAction.SeekForward -> actions.seekBy(SEEK_STEP_MS / seekStep)
+            RemoteAction.SeekBackLong -> actions.seekBy(-LONG_SEEK_STEP_MS / seekStep)
+            RemoteAction.SeekForwardLong -> actions.seekBy(LONG_SEEK_STEP_MS / seekStep)
             RemoteAction.PreviousFile -> actions.previousFile()
             RemoteAction.NextFile -> actions.nextFile()
             RemoteAction.VolumeUp -> volume(true)
             RemoteAction.VolumeDown -> volume(false)
-            RemoteAction.Recenter -> actions.recenter()
-            RemoteAction.ZoomIn -> actions.setZoom(menu.zoom * ZOOM_STEP)
-            RemoteAction.ZoomOut -> actions.setZoom(menu.zoom / ZOOM_STEP)
+            RemoteAction.Recenter -> {
+                // Рецентр никогда не нажимает то, на что смотрят.
+                recenterAt = clock()
+                panels.cancelPress()
+                actions.recenter()
+            }
+            RemoteAction.ZoomIn -> setZoom(menu.zoom * ZOOM_STEP)
+            RemoteAction.ZoomOut -> setZoom(menu.zoom / ZOOM_STEP)
             RemoteAction.NavUp -> panels.navKey(KeyEvent.KEYCODE_DPAD_UP)
             RemoteAction.NavDown -> panels.navKey(KeyEvent.KEYCODE_DPAD_DOWN)
             RemoteAction.NavLeft -> panels.navKey(KeyEvent.KEYCODE_DPAD_LEFT)
@@ -278,6 +318,18 @@ class RemoteInput(
 
         /** При полном отклонении — около 20 секунд видео за секунду. */
         const val AXIS_SEEK_MS_PER_TICK = 1_000f
+
+        /** Первую секунду скорость постоянная. */
+        const val AXIS_SEEK_STEADY_TICKS = 20
+
+        /** Дальше за это число шагов она вырастает ещё на одну базовую: вдвое за 1,5 с. */
+        const val AXIS_SEEK_TICKS_TO_DOUBLE = 30f
+        const val AXIS_SEEK_MAX_SPEED_UP = 6f
+        const val HELD_SEEK_DIVIDER = 4L
+
+        /** Два кода от одной кнопки приходят почти одновременно. */
+        const val SAME_PRESS_MS = 150L
+        val OK_KEYS = setOf(KeyEvent.KEYCODE_DPAD_CENTER, KeyEvent.KEYCODE_ENTER, KeyEvent.KEYCODE_BUTTON_A)
 
         val SMOOTH_AXES = listOf(RemoteAction.AxisScroll, RemoteAction.AxisSeek, RemoteAction.AxisZoom)
 

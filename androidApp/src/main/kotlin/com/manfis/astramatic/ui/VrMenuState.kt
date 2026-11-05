@@ -58,6 +58,9 @@ class VrMenuState {
     var queueIndex by mutableStateOf(0)
 
     val library = LibraryState()
+
+    /** Сейчас виден сам хаб: в шлеме он парит без общего фона. */
+    val showingHub get() = stereo && mode == Mode.Menu && tab == Tab.Home && library.atRoot
 }
 
 /** Что интерфейс умеет делать с плеером. */
@@ -74,6 +77,9 @@ interface VrMenuActions {
     fun resetFormat()
     fun toggleStereo()
     fun recenter()
+
+    /** Рецентр из интерфейса: отсчёт, и центр встаёт туда, куда смотрят в его конце. */
+    fun recenterAfterCountdown()
     fun setZoom(zoom: Float)
     fun setSpeed(speed: Float)
 

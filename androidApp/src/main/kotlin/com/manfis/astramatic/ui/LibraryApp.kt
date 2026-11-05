@@ -97,6 +97,9 @@ internal sealed interface Screen {
 /** Где пользователь находится в библиотеке. Вынесено наружу, чтобы переживать переключение вкладок меню. */
 class LibraryState {
     internal val backStack = mutableStateListOf<Screen>(Screen.Home)
+
+    /** Открыт корень библиотеки, а не папка или редактор. */
+    val atRoot get() = backStack.last() == Screen.Home
 }
 
 /**
@@ -110,6 +113,8 @@ fun LibraryApp(
     state: LibraryState = remember { LibraryState() },
     embedded: Boolean = false,
     allowEditing: Boolean = true,
+    /** В шлеме: вместо простого списка — хаб, с этим заголовком и действиями. */
+    hub: HubChrome? = null,
 ) {
     val context = LocalContext.current
     val library = remember { MediaLibrary(context) }
@@ -141,7 +146,17 @@ fun LibraryApp(
     }
 
     when (val screen = backStack.last()) {
-        Screen.Home -> HomeScreen(
+        Screen.Home -> if (hub != null) {
+            val settings = remember { AppSettings.get(context) }
+            val history = remember { History.get(context) }
+            HubHome(
+                chrome = hub,
+                sources = rememberHubSources(library) { source, title -> push(Screen.Browse(source, "", title)) },
+                recent = if (settings.keepHistory) history.entries else emptyList(),
+                onPlayRecent = { onPlay(Playlist.single(it.toPlaylistItem())) },
+                onOpenHistory = { push(Screen.History) },
+            )
+        } else HomeScreen(
             library = library,
             embedded = embedded,
             allowEditing = allowEditing,

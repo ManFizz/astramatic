@@ -46,9 +46,15 @@ interface VrScene {
 
     /** Соседнее окно под взглядом; null — взгляд не на нём. */
     val hoverSide: SideSlot?
+
+    /** Полоска вверху поля зрения: приближение или перемотка. */
+    fun showHud(bar: HudBar)
+
+    /** Кольцо отсчёта перед рецентром длиной [durationMs]; null — убрать. */
+    fun showRecenterRing(durationMs: Long?)
 }
 
-/** Отложенные задачи на главном потоке. Одна и та же задача не ставится повторно, снимается по ссылке. */
+/** Отложенные задачи на главном потоке. Снимаются по ссылке; поставленная дважды выполнится дважды. */
 interface Ticks {
     fun schedule(task: Runnable, delayMs: Long = 0L)
     fun cancel(task: Runnable)

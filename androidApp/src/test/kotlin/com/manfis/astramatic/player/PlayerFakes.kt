@@ -83,7 +83,15 @@ class FakeScene : VrScene {
     val placements = mutableListOf<PanelPlacement>()
     val placedInFront get() = placements.count { it == PanelPlacement.InFront }
     override var hoverSide: SideSlot? = null
+    val huds = mutableListOf<HudBar>()
+    val rings = mutableListOf<Long?>()
 
+    override fun showHud(bar: HudBar) {
+        huds += bar
+    }
+    override fun showRecenterRing(durationMs: Long?) {
+        rings += durationMs
+    }
     override fun recenter() {
         recenters++
     }

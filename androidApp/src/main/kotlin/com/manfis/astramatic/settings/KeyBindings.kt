@@ -26,7 +26,7 @@ enum class RemoteAction(
 ) {
     Click("Нажатие — как кнопка Cardboard (удерживать и вести головой — прокрутка)", ActionGroup.Main),
     Back("Назад / закрыть меню", ActionGroup.Main, false, KeyEvent.KEYCODE_BACK),
-    Controls("Полоска → меню → скрыть", ActionGroup.Main, false, KeyEvent.KEYCODE_MENU),
+    Controls("Полоска → хаб → просмотр", ActionGroup.Main, false, KeyEvent.KEYCODE_MENU),
 
     AxisSeek("Перемотка стиком — чем сильнее отклонение, тем быстрее", ActionGroup.Playback, true),
     PlayPause("Пауза / воспроизведение", ActionGroup.Playback, false, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE),

@@ -20,6 +20,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.datasource.DataSourceUtil
 import androidx.media3.datasource.DataSpec
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.SeekParameters
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
 import coil3.SingletonImageLoader
 import coil3.request.ErrorResult
@@ -89,6 +90,11 @@ class PlayerMedia(
 
     override fun seekTo(positionMs: Long) = player.seekTo(positionMs)
     override fun setSpeed(speed: Float) = player.setPlaybackSpeed(speed)
+
+    override fun setScrubbing(on: Boolean) {
+        player.setSeekParameters(if (on) SeekParameters.CLOSEST_SYNC else SeekParameters.DEFAULT)
+        player.volume = if (on) 0f else 1f
+    }
 
     /** Поверхность кадра от рендерера; после пересоздания GL-контекста — новая. */
     fun onVideoSurface(surface: Surface) {

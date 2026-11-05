@@ -62,8 +62,20 @@ enum class PanelPlacement {
 /** Точка взгляда на панели в пикселях виртуального дисплея. */
 data class Gaze(val x: Float, val y: Float)
 
-/** За что можно взяться у меню: уголки — растянуть, полоска под меню — перетащить. */
-enum class Handle { None, TopLeft, TopRight, BottomLeft, BottomRight, Move }
+/**
+ * За что можно взяться: уголки меню — растянуть; [Move] — ручка под панелью, [Screen] — под плоским экраном,
+ * [SideLeft] и [SideRight] — под соседними окнами.
+ */
+enum class Handle {
+    None, TopLeft, TopRight, BottomLeft, BottomRight, Move, Screen, SideLeft, SideRight;
+
+    val resizes get() = this == TopLeft || this == TopRight || this == BottomLeft || this == BottomRight
+    val side get() = when (this) {
+        SideLeft -> SideSlot.Left
+        SideRight -> SideSlot.Right
+        else -> null
+    }
+}
 
 /** Настройки, от которых зависит геометрия; читаются каждый кадр. */
 interface PanelPreferences {
@@ -115,6 +127,10 @@ class PanelTracker(
         private set
     var videoPitchDeg = 0f
         private set
+
+    /** На сколько плоский экран подняли ручкой. Окружение при этом не наклоняется. */
+    var screenLiftDeg = 0f
+        private set
     var panelYawDeg = 0f
         private set
     var panelPitchDeg = 0f
@@ -144,6 +160,15 @@ class PanelTracker(
     var activeHandle = Handle.None
         private set
 
+    private var localX = 0f
+    private var localY = 0f
+    private var localZ = -1f
+
+    /** Взгляд относительно поворота экрана вокруг вертикали, без наклона: в этой системе стоят соседние окна. */
+    private var turnedX = 0f
+    private var turnedY = 0f
+    private var turnedZ = -1f
+
     private var grabYawOffset = 0f
     private var grabPitchOffset = 0f
     private var grabStartDistance = 0f
@@ -154,6 +179,16 @@ class PanelTracker(
 
     /** Соседние окна плоского экрана этого кадра; null — их нет. */
     @Volatile var sideLayout: SideLayout? = null
+
+    /** Плоский экран этого кадра, если за него можно взяться; иначе null. */
+    @Volatile var screenGrip: ScreenGrip? = null
+
+    /** Ручка экрана должна быть видна: на неё почти смотрят или открыта полоска. */
+    var screenGripWanted = false
+        private set
+
+    /** Куда отодвинули соседние окна. */
+    val sideOffsets = SideOffsets()
 
     /** Соседнее окно под взглядом. Обновляется каждый кадр. */
     @Volatile var hoverSide: SideSlot? = null
@@ -190,28 +225,24 @@ class PanelTracker(
             }
             if (settling) {
                 settleFrames.decrementAndGet()
-                if (recenterRequested.get()) {
-                    videoYawDeg = lookYawDeg
-                    videoPitchDeg = lookPitchDeg
-                }
+                if (recenterRequested.get()) moveVideo(lookYawDeg, lookPitchDeg)
             } else if (recenterRequested.getAndSet(false)) {
-                videoYawDeg = lookYawDeg
-                videoPitchDeg = lookPitchDeg
+                moveVideo(lookYawDeg, lookPitchDeg)
             }
             val placement = if (settling) PanelPlacement.InFront else placeRequested.getAndSet(null)
             if (placement != null) {
                 place(placement, lookYawDeg, lookPitchDeg, truePitchDeg)
             } else if (activeHandle == Handle.Move) {
-                // Меню едет за взглядом, сохраняя, где за него взялись.
+                // Панель едет за взглядом, сохраняя, где за неё взялись.
                 panelYawDeg = wrapDegrees(lookYawDeg + grabYawOffset)
                 panelPitchDeg = (truePitchDeg + grabPitchOffset).coerceIn(-MAX_MENU_PITCH, MAX_MENU_PITCH)
+            } else if (activeHandle == Handle.Screen) {
+                videoYawDeg = wrapDegrees(lookYawDeg + grabYawOffset)
+                screenLiftDeg = (truePitchDeg + grabPitchOffset - videoPitchDeg).coerceIn(-MAX_MENU_PITCH, MAX_MENU_PITCH)
             }
         }
 
-        if (!settling && centerOnPanelRequested.getAndSet(false)) {
-            videoYawDeg = panelYawDeg
-            videoPitchDeg = panelPitchDeg
-        }
+        if (!settling && centerOnPanelRequested.getAndSet(false)) moveVideo(panelYawDeg, panelPitchDeg)
 
         val layout = layout
         // Меню дальше — то же по видимому размеру, но глазам меньше сводиться при переходе от видео к меню.
@@ -224,15 +255,32 @@ class PanelTracker(
         panelZ = -PANEL_DISTANCE * scale
 
         updateHit(x, y, z)
-        if (activeHandle != Handle.None && activeHandle != Handle.Move) resizeMenu()
+        if (activeHandle.resizes) resizeMenu()
         val interactive = panelVisible && !settling
-        hoverHandle = when {
+        val panelHandle = when {
             activeHandle != Handle.None -> activeHandle
-            interactive && layout == PanelLayout.Menu -> findHandle()
+            interactive -> findHandle(layout)
             else -> Handle.None
         }
         gaze = if (interactive && activeHandle == Handle.None) computeGaze(layout) else null
-        updateSide(x, y, z, layout)
+        toVideoFrame(x, y, z)
+        dragSide()
+        updateSide(layout)
+        val sideHandle = findSideHandle()
+        val screenHandle = findScreenHandle()
+        hoverHandle = when {
+            panelHandle != Handle.None || gaze != null -> panelHandle
+            sideHandle != Handle.None -> sideHandle
+            else -> screenHandle
+        }
+        if (hoverHandle != Handle.None) hoverSide = null
+    }
+
+    /** Новый центр видео: экран снова на его высоте. */
+    private fun moveVideo(yawDeg: Float, pitchDeg: Float) {
+        videoYawDeg = yawDeg
+        videoPitchDeg = pitchDeg
+        screenLiftDeg = 0f
     }
 
     private fun place(placement: PanelPlacement, lookYawDeg: Float, lookPitchDeg: Float, truePitchDeg: Float) {
@@ -248,29 +296,81 @@ class PanelTracker(
             PanelPlacement.Center -> {
                 val nearCenter = abs(wrapDegrees(lookYawDeg - videoYawDeg)) <= MENU_CENTER_REACH_DEG
                 panelYawDeg = if (nearCenter) videoYawDeg else lookYawDeg
-                panelPitchDeg = videoPitchDeg
+                panelPitchDeg = videoPitchDeg + screenLiftDeg
             }
         }
     }
 
-    /** Взгляд в системе видео: видны ли соседние окна и на какое из них смотрят. */
-    private fun updateSide(x: Float, y: Float, z: Float, layout: PanelLayout) {
+    /** Взгляд в системе экрана: с учётом его поворота и подъёма. */
+    private fun toVideoFrame(x: Float, y: Float, z: Float) {
+        val yaw = Math.toRadians(videoYawDeg.toDouble())
+        val pitch = Math.toRadians((videoPitchDeg + screenLiftDeg).toDouble())
+        localX = (cos(yaw) * x - sin(yaw) * z).toFloat()
+        val depth = sin(yaw) * x + cos(yaw) * z
+        localY = (cos(pitch) * y + sin(pitch) * depth).toFloat()
+        localZ = (cos(pitch) * depth - sin(pitch) * y).toFloat()
+        turnedX = localX
+        turnedY = y
+        turnedZ = depth.toFloat()
+    }
+
+    private val localYawDeg get() = Math.toDegrees(atan2(-localX, -localZ).toDouble()).toFloat()
+    private val turnedYawDeg get() = Math.toDegrees(atan2(-turnedX, -turnedZ).toDouble()).toFloat()
+    private val turnedPitchDeg get() = Math.toDegrees(asin(turnedY.coerceIn(-1f, 1f).toDouble())).toFloat()
+
+    /** Наклон экрана: на этой высоте стоят соседние окна. */
+    val screenPitchDeg get() = videoPitchDeg + screenLiftDeg
+
+    /** Соседнее окно едет за взглядом, сохраняя, где за него взялись. */
+    private fun dragSide() {
+        val slot = activeHandle.side ?: return
+        val side = sideLayout ?: return
+        sideOffsets.set(
+            slot,
+            wrapDegrees(turnedYawDeg + grabYawOffset - side.yawOf(slot)),
+            (turnedPitchDeg + grabPitchOffset - screenPitchDeg).coerceIn(-MAX_MENU_PITCH, MAX_MENU_PITCH),
+        )
+    }
+
+    /** Видны ли соседние окна и на какое из них смотрят. */
+    private fun updateSide(layout: PanelLayout) {
         val side = sideLayout
         if (side == null || settling) {
             hoverSide = null
             sideWanted = false
             return
         }
-        val yaw = Math.toRadians(videoYawDeg.toDouble())
-        val pitch = Math.toRadians(videoPitchDeg.toDouble())
-        val localX = (cos(yaw) * x - sin(yaw) * z).toFloat()
-        val turnedZ = sin(yaw) * x + cos(yaw) * z
-        val localY = (cos(pitch) * y + sin(pitch) * turnedZ).toFloat()
-        val localZ = (cos(pitch) * turnedZ - sin(pitch) * y).toFloat()
-        val relativeYaw = Math.toDegrees(atan2(-localX, -localZ).toDouble()).toFloat()
-        val pastEdge = abs(relativeYaw) > side.screenHalfDeg - SIDE_REVEAL_MARGIN_DEG
-        sideWanted = pastEdge || (panelVisible && layout != PanelLayout.Menu)
-        hoverSide = if (gaze != null || activeHandle != Handle.None) null else side.slotAt(localX, localY, localZ)
+        val pastEdge = abs(localYawDeg) > side.screenHalfDeg - SIDE_REVEAL_MARGIN_DEG
+        val sideDragged = activeHandle.side != null
+        sideWanted = pastEdge || sideDragged || (panelVisible && layout != PanelLayout.Menu)
+        hoverSide = if (gaze != null || activeHandle != Handle.None) null else side.slotAt(turnedX, turnedY, turnedZ, sideOffsets, screenPitchDeg)
+    }
+
+    private fun findSideHandle(): Handle {
+        val side = sideLayout ?: return Handle.None
+        if (settling) return Handle.None
+        return when (side.gripAt(turnedX, turnedY, turnedZ, sideOffsets, screenPitchDeg)) {
+            SideSlot.Left -> Handle.SideLeft
+            SideSlot.Right -> Handle.SideRight
+            null -> Handle.None
+        }
+    }
+
+    private fun findScreenHandle(): Handle {
+        val grip = screenGrip
+        if (grip == null || settling || localZ > -0.01f) {
+            screenGripWanted = false
+            return Handle.None
+        }
+        val t = -grip.distance / localZ
+        val pointX = localX * t
+        val pointY = localY * t
+        val onGrip = abs(pointX) <= grip.width / 2 + grip.reach && abs(pointY - grip.y) <= grip.reach
+        // Проявляется заранее, когда взгляд подходит к нижнему краю экрана или открыта полоска.
+        screenGripWanted = onGrip || activeHandle == Handle.Screen ||
+            (abs(pointX) <= grip.width * 2 && abs(pointY - grip.y) <= grip.reach * 4) ||
+            (panelVisible && layout != PanelLayout.Menu)
+        return if (onGrip) Handle.Screen else Handle.None
     }
 
     /**
@@ -300,7 +400,10 @@ class PanelTracker(
         " size=${"%.3f".format(java.util.Locale.ROOT, if (layout == PanelLayout.Menu) panelW / (layout.width * panelScale) else 1f)}" +
         " panelYaw=${"%.1f".format(java.util.Locale.ROOT, panelYawDeg)}" +
         " panelPitch=${"%.1f".format(java.util.Locale.ROOT, panelPitchDeg)}" +
-        " videoYaw=${"%.1f".format(java.util.Locale.ROOT, videoYawDeg)}"
+        " videoYaw=${"%.1f".format(java.util.Locale.ROOT, videoYawDeg)}" +
+        " screenLift=${"%.1f".format(java.util.Locale.ROOT, screenLiftDeg)}" +
+        " sideLeft=${"%.1f".format(java.util.Locale.ROOT, sideOffsets.yaw(SideSlot.Left))}" +
+        " sideRight=${"%.1f".format(java.util.Locale.ROOT, sideOffsets.yaw(SideSlot.Right))}"
 
     /** Размер меню (множитель к обычному): во время растягивания — живой, иначе из настроек. */
     private fun menuSize(): Float {
@@ -317,18 +420,31 @@ class PanelTracker(
 
     private fun startGrab(handle: Handle, lookYawDeg: Float, truePitchDeg: Float) {
         activeHandle = handle
-        if (handle == Handle.Move) {
-            grabYawOffset = wrapDegrees(panelYawDeg - lookYawDeg)
-            grabPitchOffset = panelPitchDeg - truePitchDeg
-        } else {
-            grabStartSize = menuSize()
-            grabStartDistance = if (hitX.isNaN()) 0f else hypot(hitX, hitY - panelCy)
-            liveMenuSize = grabStartSize
+        val slot = handle.side
+        when {
+            handle == Handle.Move -> {
+                grabYawOffset = wrapDegrees(panelYawDeg - lookYawDeg)
+                grabPitchOffset = panelPitchDeg - truePitchDeg
+            }
+            handle == Handle.Screen -> {
+                grabYawOffset = wrapDegrees(videoYawDeg - lookYawDeg)
+                grabPitchOffset = videoPitchDeg + screenLiftDeg - truePitchDeg
+            }
+            slot != null -> {
+                val side = sideLayout
+                grabYawOffset = wrapDegrees((side?.yawOf(slot) ?: 0f) + sideOffsets.yaw(slot) - turnedYawDeg)
+                grabPitchOffset = sideOffsets.pitch(slot) + screenPitchDeg - turnedPitchDeg
+            }
+            else -> {
+                grabStartSize = menuSize()
+                grabStartDistance = if (hitX.isNaN()) 0f else hypot(hitX, hitY - panelCy)
+                liveMenuSize = grabStartSize
+            }
         }
     }
 
     private fun endGrab() {
-        val wasResize = activeHandle != Handle.Move
+        val wasResize = activeHandle.resizes
         activeHandle = Handle.None
         if (wasResize && !liveMenuSize.isNaN()) onMenuSizeChanged(liveMenuSize)
     }
@@ -363,8 +479,8 @@ class PanelTracker(
         hitY = localY * t
     }
 
-    /** Уголок или полоска под взглядом. Уголки — снаружи меню, чтобы не мешать его кнопкам. */
-    private fun findHandle(): Handle {
+    /** Ручка, а у меню и уголок, под взглядом. Они снаружи панели, чтобы не мешать её кнопкам. */
+    private fun findHandle(layout: PanelLayout): Handle {
         if (hitX.isNaN()) return Handle.None
         val s = panelScale
         val halfW = panelW / 2
@@ -372,6 +488,7 @@ class PanelTracker(
         val bottom = panelCy - panelH / 2
         val barY = bottom - BAR_GAP * s
         if (abs(hitX) < panelW * BAR_WIDTH / 2 + BAR_HIT * s && abs(hitY - barY) < BAR_HIT * s) return Handle.Move
+        if (layout != PanelLayout.Menu) return Handle.None
         val inset = EDGE_INSET * s
         val inside = abs(hitX) < halfW - inset && hitY < top - inset && hitY > bottom + inset
         if (inside) return Handle.None

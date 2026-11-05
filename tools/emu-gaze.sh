@@ -75,7 +75,7 @@ expect "трекинг устоялся" settling false
 expect "открыта главная" tab Home
 
 echo "--- Навести на кнопку и нажать (VR-03)"
-aim_button 1158 48
+aim_button 110 752
 shot 1-hover-settings
 "$emu" tap
 expect "кнопка сработала, открыты настройки" tab Settings

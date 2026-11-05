@@ -5,6 +5,8 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.wrapContentSize
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
@@ -22,6 +24,7 @@ import com.github.takahirom.roborazzi.captureRoboImage
 import com.manfis.astramatic.model.Projection
 import com.manfis.astramatic.model.StereoLayout
 import com.manfis.astramatic.model.VideoFormat
+import com.manfis.astramatic.player.HistoryEntry
 import com.manfis.astramatic.player.Playlist
 import com.manfis.astramatic.player.PlaylistItem
 import com.manfis.astramatic.player.PANEL_DENSITY_DPI
@@ -61,6 +64,7 @@ class VrPanelScreenshotTest {
         override fun resetFormat() = Unit
         override fun toggleStereo() = Unit
         override fun recenter() = Unit
+        override fun recenterAfterCountdown() = Unit
         override fun setZoom(zoom: Float) = Unit
         override fun setSpeed(speed: Float) = Unit
         override fun setAsEnvironment() = ""
@@ -127,6 +131,51 @@ class VrPanelScreenshotTest {
 
     @Test
     fun home() = shoot(PanelLayout.Menu, "vr_home", VrMenuState())
+
+    private fun chrome(parked: String? = null, videoOpen: Boolean = false) =
+        HubChrome(parked, videoOpen, onResume = {}, onToVideo = {}, onFormat = {}, onSettings = {})
+
+    private val hubSources = listOf(
+        HubSource("📱", "Этот телефон", "Видео и фото") {},
+        HubSource("🖥", "Домашний компьютер", "Папка Windows") {},
+        HubSource("💻", "Рабочий стол", "AstraMatic на ПК") {},
+        HubSource("🖼", "Галерея", "Darkframe") {},
+    )
+
+    private fun watched(i: Int) = HistoryEntry(
+        uri = Uri.parse("file:///storage/$i.mp4"),
+        title = "Прогулка $i",
+        isImage = i == 3,
+        format = VideoFormat(),
+        thumbnail = null,
+        darkframe = null,
+        positionMs = 60_000L * i,
+        durationMs = 600_000L,
+        watchedAt = 0L,
+    )
+
+    private fun shootHub(name: String, chrome: HubChrome, recent: List<HistoryEntry>) {
+        compose.setContent {
+            PanelFrame(PanelLayout.Menu.visibleHeightPx) {
+                MaterialTheme(colorScheme = VrColors) {
+                    CompositionLocalProvider(LocalContentColor provides VrColors.onSurface) {
+                        HubHome(chrome, hubSources, recent, onPlayRecent = {}, onOpenHistory = {})
+                    }
+                }
+            }
+        }
+        compose.waitForIdle()
+        compose.onNodeWithTag(PANEL).captureRoboImage("src/test/screenshots/$name.png")
+    }
+
+    @Test
+    fun hubFull() = shootHub("vr_hub_full", chrome(), List(8) { watched(it) })
+
+    @Test
+    fun hubEmpty() = shootHub("vr_hub_empty", chrome(), emptyList())
+
+    @Test
+    fun hubWithVideoOpen() = shootHub("vr_hub_video_open", chrome("Прогулка 0", videoOpen = true), List(3) { watched(it) })
 
     @Test
     fun homeWithVideoOpen() = shoot(PanelLayout.Menu, "vr_home_video_open", playing().apply { mode = VrMenuState.Mode.Menu })

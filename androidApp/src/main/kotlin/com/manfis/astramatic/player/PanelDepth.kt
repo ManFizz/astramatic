@@ -55,8 +55,9 @@ object StereoDisparity {
 }
 
 /**
- * Сведение глаз на видео рядом с панелью, радианы: первое измерение сразу, дальше плавно, чтобы панель не дёргалась.
- * Отдельные промахи сравнения отсекаются медианой последних измерений.
+ * Сведение глаз на видео рядом с панелью, радианы. Первые замеры применяются сразу, пока панель ещё проявляется.
+ * Дальше мелкие колебания замера не двигают её совсем, а заметная смена глубины отрабатывается медленно и
+ * равномерно: иначе панель дрожит, потому что замер всегда немного шумит.
  */
 class PanelDepth {
     var radians = 0f
@@ -66,25 +67,49 @@ class PanelDepth {
     var measured = false
         private set
 
+    /** Первые замеры идут чаще обычного. */
+    val wantsQuickSample get() = attempts < QUICK_SAMPLES
+
     private val recent = ArrayDeque<Float>()
+    private var target = 0f
+    private var attempts = 0
 
     fun reset() {
         measured = false
+        attempts = 0
         recent.clear()
     }
 
     /** null — измерить не удалось: остаётся прежнее значение. */
     fun sample(value: Float?) {
+        attempts++
         if (value == null) return
         if (recent.size == WINDOW) recent.removeFirst()
         recent.addLast(value)
         val median = recent.sorted()[recent.size / 2]
-        radians = if (measured) radians + (median - radians) * SMOOTHING else value
-        measured = true
+        if (attempts <= QUICK_SAMPLES || !measured) {
+            radians = median
+            target = median
+            measured = true
+        } else if (kotlin.math.abs(median - target) > DEAD_ZONE) {
+            target = median
+        }
+    }
+
+    /** Раз в кадр: плавно к цели. */
+    fun step(dt: Float) {
+        val limit = MAX_RATE * dt
+        radians += (target - radians).coerceIn(-limit, limit)
     }
 
     private companion object {
         const val WINDOW = 5
-        const val SMOOTHING = 0.35f
+        const val QUICK_SAMPLES = 3
+
+        /** 0,35°: столько шумит замер. */
+        const val DEAD_ZONE = 0.0061f
+
+        /** 2° в секунду. */
+        const val MAX_RATE = 0.035f
     }
 }

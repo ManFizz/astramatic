@@ -598,4 +598,154 @@ class PanelTrackerTest {
         assertEquals(50f, tracker.panelYawDeg, 0.01f)
         assertEquals(0f, tracker.videoYawDeg, 0.01f)
     }
+
+    // --- Всё перетаскивается: VR-08, VR-25, VR-26 ------------------------------------------------------
+
+    @Test
+    fun `controls have a handle under them, but no corners`() {
+        tracker.layout = PanelLayout.Controls
+        settle()
+
+        lookAtPlane(0f, tracker.panelCy - tracker.panelH / 2 - 0.08f)
+        assertEquals(Handle.Move, tracker.hoverHandle)
+
+        lookAtPlane(cornerX(1), cornerY(-1))
+        assertEquals(Handle.None, tracker.hoverHandle)
+    }
+
+    @Test
+    fun `controls follow the gaze by their handle`() {
+        tracker.layout = PanelLayout.Controls
+        settle()
+        val y = tracker.panelCy - tracker.panelH / 2 - 0.08f
+        lookAtPlane(0f, y)
+        grabAt(Handle.Move)
+        val pitch = Math.toDegrees(atan((y / PANEL_DISTANCE).toDouble())).toFloat()
+        look(0f, pitch)
+
+        look(30f, pitch)
+        release()
+
+        assertEquals(30f, tracker.panelYawDeg, 0.5f)
+        look(0f)
+        assertEquals(30f, tracker.panelYawDeg, 0.5f)
+    }
+
+    private val screen = ScreenGrip(halfHeight = 1f, distance = 3f)
+
+    private fun lookAtScreenGrip(yaw: Float = 0f) {
+        val pitch = Math.toDegrees(atan((screen.y / screen.distance).toDouble())).toFloat()
+        look(yaw, pitch)
+    }
+
+    @Test
+    fun `screen is dragged by the handle under it, the panel may be closed`() {
+        tracker.panelVisible = false
+        tracker.screenGrip = screen
+        settle()
+
+        look(0f)
+        assertEquals(Handle.None, tracker.hoverHandle)
+
+        lookAtScreenGrip()
+        grabAt(Handle.Screen)
+        lookAtScreenGrip()
+        lookAtScreenGrip(40f)
+        release()
+
+        assertEquals(40f, tracker.videoYawDeg, 0.5f)
+        assertEquals(0f, tracker.videoPitchDeg, 0.01f)
+    }
+
+    @Test
+    fun `screen goes up with the gaze and recenter brings it level`() {
+        tracker.panelVisible = false
+        tracker.screenGrip = screen
+        settle()
+        lookAtScreenGrip()
+        grabAt(Handle.Screen)
+        lookAtScreenGrip()
+        val pitch = Math.toDegrees(atan((screen.y / screen.distance).toDouble())).toFloat()
+
+        look(0f, pitch + 20f)
+        release()
+        assertEquals(20f, tracker.screenLiftDeg, 0.5f)
+
+        tracker.recenter()
+        look(0f)
+        assertEquals(0f, tracker.screenLiftDeg)
+    }
+
+    @Test
+    fun `screen without a handle cannot be taken`() {
+        tracker.panelVisible = false
+        tracker.screenGrip = null
+        settle()
+
+        lookAtScreenGrip()
+
+        assertEquals(Handle.None, tracker.hoverHandle)
+    }
+
+    private fun lookAtSideGrip(side: SideLayout, slot: SideSlot, extraYaw: Float = 0f) {
+        val pitch = Math.toDegrees(atan((side.gripY / side.distance).toDouble())).toFloat()
+        look(side.yawOf(slot) + extraYaw, pitch)
+    }
+
+    @Test
+    fun `side window is dragged by its handle and stays where left`() {
+        val side = SideLayout.of(width = 3.5f, distance = 3f, curve = 0f)
+        tracker.sideLayout = side
+        tracker.panelVisible = false
+        settle()
+
+        lookAtSideGrip(side, SideSlot.Left)
+        grabAt(Handle.SideLeft)
+        lookAtSideGrip(side, SideSlot.Left, 25f)
+        release()
+
+        assertEquals(25f, tracker.sideOffsets.yaw(SideSlot.Left), 0.5f)
+        assertEquals(0f, tracker.sideOffsets.yaw(SideSlot.Right))
+
+        // Теперь окно там: взгляд попадает в него на новом месте и мимо него на старом.
+        look(side.yawOf(SideSlot.Left) + 25f)
+        assertEquals(SideSlot.Left, tracker.hoverSide)
+        look(side.yawOf(SideSlot.Left) - 12f)
+        assertNull(tracker.hoverSide)
+    }
+
+    @Test
+    fun `looking at a side window handle does not open the window`() {
+        val side = SideLayout.of(width = 3.5f, distance = 3f, curve = 0f)
+        tracker.sideLayout = side
+        tracker.panelVisible = false
+        settle()
+
+        lookAtSideGrip(side, SideSlot.Right)
+
+        assertEquals(Handle.SideRight, tracker.hoverHandle)
+        assertNull(tracker.hoverSide)
+    }
+
+    @Test
+    fun `side windows rise with the lifted screen`() {
+        val side = SideLayout.of(width = 3.5f, distance = 3f, curve = 0f)
+        tracker.sideLayout = side
+        tracker.panelVisible = false
+        tracker.screenGrip = screen
+        settle()
+        lookAtScreenGrip()
+        grabAt(Handle.Screen)
+        lookAtScreenGrip()
+        val pitch = Math.toDegrees(atan((screen.y / screen.distance).toDouble())).toFloat()
+        look(0f, pitch + 20f)
+        release()
+        look(0f, 20f)
+
+        look(side.cardYawDeg, 20f)
+        assertEquals(SideSlot.Left, tracker.hoverSide)
+
+        look(side.cardYawDeg, -5f)
+        assertNull(tracker.hoverSide)
+    }
 }

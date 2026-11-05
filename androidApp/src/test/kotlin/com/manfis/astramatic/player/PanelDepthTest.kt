@@ -77,27 +77,73 @@ class PanelDepthTest {
         assertNull(estimate(image(source, -18), image(source, 0)))
     }
 
+    /** Прошли первые быстрые замеры: дальше панель уже видна. */
+    private fun settled(value: Float) = PanelDepth().apply { repeat(5) { sample(value) } }
+
     @Test
-    fun `first sample is taken at once and the next ones smoothly`() {
+    fun `first samples are taken at once`() {
         val depth = PanelDepth()
         assertFalse(depth.measured)
+        assertTrue(depth.wantsQuickSample)
 
         depth.sample(0.02f)
         assertEquals(0.02f, depth.radians, 0.00001f)
         assertTrue(depth.measured)
 
-        repeat(2) { depth.sample(0.06f) }
-        assertTrue(depth.radians > 0.02f && depth.radians < 0.06f, "плавно: ${depth.radians}")
+        repeat(2) { depth.sample(0.02f) }
+        assertFalse(depth.wantsQuickSample)
+    }
+
+    @Test
+    fun `noise of the measurement does not move a visible panel`() {
+        val depth = settled(0.05f)
+
+        repeat(50) {
+            depth.sample(0.05f + if (it % 2 == 0) 0.004f else -0.004f)
+            depth.step(0.016f)
+            assertEquals(0.05f, depth.radians, 0.00001f, "шаг $it")
+        }
+    }
+
+    @Test
+    fun `new depth is reached slowly and without steps`() {
+        val depth = settled(0.02f)
+        repeat(3) { depth.sample(0.06f) }
+        assertEquals(0.02f, depth.radians, 0.00001f, "сам замер панель не двигает")
+
+        var previous = depth.radians
+        repeat(60) {
+            depth.step(0.016f)
+            val moved = depth.radians - previous
+            assertTrue(moved in 0f..0.0006f, "шаг $moved")
+            previous = depth.radians
+        }
+        assertTrue(depth.radians > 0.02f && depth.radians < 0.06f, "ещё в пути: ${depth.radians}")
+
+        repeat(300) { depth.step(0.016f) }
+        assertEquals(0.06f, depth.radians, 0.00001f)
     }
 
     @Test
     fun `a single wrong match does not move the panel`() {
-        val depth = PanelDepth()
-        repeat(4) { depth.sample(0.05f) }
+        val depth = settled(0.05f)
 
         depth.sample(-0.03f)
+        repeat(100) { depth.step(0.016f) }
 
         assertEquals(0.05f, depth.radians, 0.00001f)
+    }
+
+    @Test
+    fun `first good sample after black frames is taken at once`() {
+        val depth = PanelDepth()
+        repeat(5) { depth.sample(null) }
+        assertFalse(depth.measured)
+
+        depth.sample(0.04f)
+
+        assertTrue(depth.measured)
+        assertEquals(0.04f, depth.radians, 0.00001f)
     }
 
     @Test

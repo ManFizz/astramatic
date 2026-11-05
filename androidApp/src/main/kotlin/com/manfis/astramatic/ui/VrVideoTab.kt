@@ -133,7 +133,7 @@ internal fun VideoTab(state: VrMenuState, actions: VrMenuActions) {
         }
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = actions::recenter) { Text("Рецентр") }
+            OutlinedButton(onClick = actions::recenterAfterCountdown) { Text("Рецентр") }
             OutlinedButton(onClick = actions::resetFormat) { Text("Формат по имени файла") }
         }
         if (state.isImage) {

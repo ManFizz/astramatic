@@ -159,7 +159,7 @@ private fun ControlsBar(state: VrMenuState, actions: VrMenuActions) {
         // Служебный ряд: вид слева, режимы по центру, переходы справа.
         Row(verticalAlignment = Alignment.CenterVertically) {
             Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                TextButton(onClick = actions::recenter, contentPadding = small) { Text("Центр") }
+                TextButton(onClick = actions::recenterAfterCountdown, contentPadding = small) { Text("Центр") }
                 TextButton(onClick = { actions.setZoom(state.zoom / ZOOM_STEP) }, contentPadding = small) { Text("−") }
                 TextButton(onClick = { actions.setZoom(state.zoom * ZOOM_STEP) }, contentPadding = small) { Text("+") }
                 // Из шлема 2D не включается: только пальцем, кнопкой на экране (как крестик).

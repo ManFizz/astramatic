@@ -758,4 +758,123 @@ class PanelControllerTest {
         time.advance(100)
         assertTrue(host.hovers.size > hovers)
     }
+
+    // --- Рецентр из интерфейса: VR-24 ---------------------------------------------------------------
+
+    @Test
+    fun `recenter button hides the panel, counts a second and only then recenters`() {
+        videoOpen()
+        panels.showControls()
+
+        panels.recenterAfterCountdown()
+
+        assertHidden()
+        assertEquals(listOf<Long?>(PanelController.RECENTER_COUNTDOWN_MS), scene.rings)
+        time.advance(PanelController.RECENTER_COUNTDOWN_MS - 1)
+        assertEquals(0, scene.recenters)
+
+        time.advance(1)
+        assertEquals(1, scene.recenters)
+        assertEquals(null, scene.rings.last())
+    }
+
+    @Test
+    fun `opening the panel during the countdown cancels it`() {
+        videoOpen()
+        panels.recenterAfterCountdown()
+        time.advance(300)
+
+        panels.showControls()
+        time.advance(2_000)
+
+        assertEquals(0, scene.recenters)
+        assertEquals(null, scene.rings.last())
+    }
+
+    // --- Долгое нажатие на панели: RC-17 --------------------------------------------------------------
+
+    @Test
+    fun `long still press on the panel recenters and does not click`() {
+        videoOpen()
+        panels.showControls()
+        scene.gaze = point
+
+        press(PressTracker.LONG_PRESS_MS + 100)
+
+        assertEquals(1, scene.recenters)
+        assertEquals(TouchPhase.Cancel, host.touches.last().first)
+        assertEquals(PanelPlace.Vr, host.place)
+    }
+
+    @Test
+    fun `long press with a dragging gaze stays a drag`() {
+        videoOpen()
+        panels.showControls()
+        scene.gaze = point
+
+        panels.triggerDown(time.now)
+        scene.gaze = Gaze(point.x, point.y + 200f)
+        time.advance(PressTracker.LONG_PRESS_MS + 100)
+        panels.triggerUp(time.now)
+
+        assertEquals(0, scene.recenters)
+        assertEquals(TouchPhase.Up, host.touches.last().first)
+    }
+
+    @Test
+    fun `short press on the panel clicks`() {
+        videoOpen()
+        panels.showControls()
+        scene.gaze = point
+
+        press(100)
+
+        assertEquals(0, scene.recenters)
+        assertEquals(TouchPhase.Up, host.touches.last().first)
+    }
+
+    @Test
+    fun `cancelled press does nothing on release`() {
+        videoOpen()
+        panels.showControls()
+        scene.gaze = point
+        panels.triggerDown(time.now)
+
+        panels.cancelPress()
+        assertEquals(TouchPhase.Cancel, host.touches.last().first)
+        val before = host.touches.size
+        time.advance(100)
+        panels.triggerUp(time.now)
+
+        assertEquals(before, host.touches.size)
+        assertEquals(PanelPlace.Vr, host.place)
+    }
+
+    // --- Перетаскивание: VR-08, VR-25 --------------------------------------------------------------------------
+
+    @Test
+    fun `screen handle can be taken with the panel hidden`() {
+        videoOpen()
+        scene.hoverHandle = Handle.Screen
+
+        panels.triggerDown(time.now)
+        assertEquals(Handle.Screen, scene.grab)
+        time.advance(800)
+        panels.triggerUp(time.now)
+
+        assertEquals(Handle.None, scene.grab)
+        assertHidden()
+        assertEquals(0, scene.recenters)
+    }
+
+    @Test
+    fun `controls do not hide while the gaze is on their handle`() {
+        videoOpen()
+        panels.showControls()
+        scene.hoverHandle = Handle.Move
+
+        time.advance(60_000)
+
+        assertEquals(PanelPlace.Vr, host.place)
+    }
 }
