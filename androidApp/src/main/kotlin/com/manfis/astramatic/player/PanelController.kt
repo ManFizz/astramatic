@@ -68,6 +68,7 @@ class PanelController(
     fun goBack() {
         val library = menu.library.backStack
         when {
+            menu.keyboard.isOpen -> menu.keyboard.close()
             menu.capturingKey != null -> menu.capturingKey = null
             menu.sheet != null -> menu.sheet = null
             menu.title != null -> leaveToHub()
@@ -79,6 +80,7 @@ class PanelController(
     }
 
     fun hide() {
+        menu.keyboard.close()
         menu.notice = null
         menu.sheet = null
         press.dropGrab()

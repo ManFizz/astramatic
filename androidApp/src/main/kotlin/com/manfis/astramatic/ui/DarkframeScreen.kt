@@ -13,7 +13,6 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -129,25 +128,24 @@ private fun <T> PairScreen(
     ) {
         Text(if (initial == null) "Подключить: $title" else title, style = MaterialTheme.typography.headlineSmall)
 
-        OutlinedTextField(
-            value = name, onValueChange = { name = it },
-            label = { Text("Название (необязательно)") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
-        )
+        AppTextField(name, { name = it }, label = "Название (необязательно)", modifier = Modifier.fillMaxWidth())
 
         if (initial == null) {
             Text(instructions, style = MaterialTheme.typography.bodyMedium)
-            Button(enabled = !busy, onClick = {
+            // В шлеме камера закрыта: только ссылка.
+            if (LocalVrKeyboard.current == null) Button(enabled = !busy, onClick = {
                 val options = GmsBarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build()
                 GmsBarcodeScanning.getClient(context, options).startScan()
                     .addOnSuccessListener { barcode -> barcode.rawValue?.let(::connect) }
                     .addOnFailureListener { status = "Сканер недоступен: ${it.message}. Вставьте ссылку вручную." }
             }) { Text("Сканировать QR-код") }
 
-            OutlinedTextField(
-                value = link, onValueChange = { link = it },
-                label = { Text("…или ссылка") },
-                placeholder = { Text(placeholder) },
-                singleLine = true, modifier = Modifier.fillMaxWidth(),
+            AppTextField(
+                link, { link = it },
+                label = "Ссылка",
+                placeholder = placeholder,
+                modifier = Modifier.fillMaxWidth(),
+                onDone = { if (!busy && link.isNotBlank()) connect(link) },
             )
             OutlinedButton(enabled = !busy && link.isNotBlank(), onClick = { connect(link) }) { Text("Подключить по ссылке") }
         } else if (address != null) {

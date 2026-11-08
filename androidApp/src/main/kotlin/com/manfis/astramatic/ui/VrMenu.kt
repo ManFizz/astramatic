@@ -2,7 +2,11 @@ package com.manfis.astramatic.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
@@ -49,15 +53,26 @@ fun VrMenu(state: VrMenuState, actions: VrMenuActions) {
     MaterialTheme(colorScheme = VrColors) {
         when (state.mode) {
             VrMenuState.Mode.Controls -> ControlsLayer(state, actions)
-            VrMenuState.Mode.Menu ->
-                if (state.showingHub) {
-                    // Хаб парит без общего фона: вокруг него видно окружение.
-                    CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurface) {
-                        MenuContent(state, actions)
+            VrMenuState.Mode.Menu -> CompositionLocalProvider(LocalVrKeyboard provides state.keyboard.takeIf { state.stereo }) {
+                // Клавиатура снизу, содержимое над ней сжимается: видно, что находит поиск.
+                Column(Modifier.fillMaxSize()) {
+                    Box(Modifier.fillMaxWidth().weight(1f)) {
+                        if (state.showingHub) {
+                            // Хаб парит без общего фона: вокруг него видно окружение.
+                            CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurface) {
+                                MenuContent(state, actions)
+                            }
+                        } else {
+                            Panel(Modifier.fillMaxSize(), shape(state)) { MenuContent(state, actions) }
+                        }
                     }
-                } else {
-                    Panel(Modifier.fillMaxSize(), shape(state)) { MenuContent(state, actions) }
+                    if (state.stereo && state.keyboard.isOpen) {
+                        CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onSurface) {
+                            VrKeyboard(state.keyboard, Modifier.padding(top = 8.dp))
+                        }
+                    }
                 }
+            }
         }
     }
 }

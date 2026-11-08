@@ -26,7 +26,6 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -41,7 +40,6 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
@@ -49,6 +47,7 @@ import com.manfis.astramatic.headset.HeadsetActivity
 import coil3.compose.AsyncImage
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.ContentScale
@@ -105,7 +104,7 @@ class LibraryState {
 /**
  * Источники видео, просмотр папок, формат по умолчанию.
  * [embedded] — внутри меню плеера (без кнопок «Войти в VR», шлема и справки),
- * [allowEditing] = false — в шлеме, где нельзя набирать текст: компьютеры только просматриваются.
+ * [allowEditing] = false — компьютеры только просматриваются, без изменения и добавления.
  */
 @Composable
 fun LibraryApp(
@@ -151,10 +150,21 @@ fun LibraryApp(
             val history = remember { History.get(context) }
             HubHome(
                 chrome = hub,
-                sources = rememberHubSources(library) { source, title -> push(Screen.Browse(source, "", title)) },
+                sources = rememberHubSources(
+                    library,
+                    onOpen = { source, title -> push(Screen.Browse(source, "", title)) },
+                    onEditServer = { push(Screen.EditServer(it)) },
+                    onEditDesktop = { push(Screen.EditDesktop(it)) },
+                    onEditDarkframe = { push(Screen.EditDarkframe(it)) },
+                ),
                 recent = if (settings.keepHistory) history.entries else emptyList(),
                 onPlayRecent = { onPlay(Playlist.single(it.toPlaylistItem())) },
                 onOpenHistory = { push(Screen.History) },
+                add = HubAdd(
+                    onDesktop = { push(Screen.EditDesktop(null)) },
+                    onFolder = { push(Screen.EditServer(null)) },
+                    onDarkframe = { push(Screen.EditDarkframe(null)) },
+                ).takeIf { allowEditing },
             )
         } else HomeScreen(
             library = library,
@@ -363,6 +373,7 @@ private fun BrowseScreen(
     var error by remember(screen) { mutableStateOf<String?>(null) }
     var reload by remember { mutableIntStateOf(0) }
     var permissionAsked by remember { mutableStateOf(false) }
+    var query by remember(screen) { mutableStateOf("") }
 
     val needsPermission = screen.source == MediaSourceRef.Phone && MEDIA_PERMISSIONS.any {
         ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED
@@ -400,10 +411,14 @@ private fun BrowseScreen(
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
+            if (!entries.isNullOrEmpty()) {
+                AppTextField(query, { query = it }, label = "🔍 Поиск в папке", modifier = Modifier.width(260.dp))
+            }
         }
         HorizontalDivider()
 
         val list = entries
+        val shown = list?.filter { TextSearch.matches(it.name, query) }
         when {
             needsPermission -> CenterMessage("Нужен доступ к видео и фото на телефоне.") {
                 Button(onClick = { permission.launch(MEDIA_PERMISSIONS) }) { Text("Разрешить") }
@@ -417,8 +432,13 @@ private fun BrowseScreen(
 
             list.isEmpty() -> CenterMessage("Здесь нет папок, видео и фото.") {}
 
+            shown.isNullOrEmpty() -> CenterMessage("Ничего не найдено: «${query.trim()}».") {
+                TextButton(onClick = { query = "" }) { Text("Показать всё") }
+            }
+
+            // Список для «следующий / предыдущий» — вся папка, а не только найденное.
             else -> LazyColumn(Modifier.fillMaxSize()) {
-                items(list, key = { it.path }) { entry ->
+                items(shown, key = { it.path }) { entry ->
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -530,11 +550,11 @@ private fun EditServerScreen(
     ) {
         Text(if (initial == null) "Новый компьютер" else "Компьютер", style = MaterialTheme.typography.headlineSmall)
 
-        OutlinedTextField(
-            value = address, onValueChange = { address = it },
-            label = { Text("Адрес общей папки") },
-            placeholder = { Text("\\\\MY-PC\\Videos  или  192.168.1.5/Videos") },
-            singleLine = true, modifier = Modifier.fillMaxWidth(),
+        AppTextField(
+            address, { address = it },
+            label = "Адрес общей папки",
+            placeholder = "\\\\MY-PC\\Videos  или  192.168.1.5/Videos",
+            modifier = Modifier.fillMaxWidth(),
             isError = address.isNotBlank() && parsed == null,
         )
         Text(
@@ -542,28 +562,15 @@ private fun EditServerScreen(
                 "свойства папки → Доступ.",
             style = MaterialTheme.typography.bodySmall,
         )
-        OutlinedTextField(
-            value = name, onValueChange = { name = it },
-            label = { Text("Название (необязательно)") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = user, onValueChange = { user = it },
-            label = { Text("Пользователь Windows") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
-        )
-        OutlinedTextField(
-            value = password, onValueChange = { password = it },
-            label = { Text("Пароль") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
-            visualTransformation = PasswordVisualTransformation(),
-        )
+        AppTextField(name, { name = it }, label = "Название (необязательно)", modifier = Modifier.fillMaxWidth())
+        AppTextField(user, { user = it }, label = "Пользователь Windows", modifier = Modifier.fillMaxWidth())
+        AppTextField(password, { password = it }, label = "Пароль", modifier = Modifier.fillMaxWidth(), secret = true)
         Text(
             "Если вход в Windows через учётную запись Microsoft — укажите её почту и пароль от неё (не PIN-код). " +
                 "Пусто — гостевой вход.",
             style = MaterialTheme.typography.bodySmall,
         )
-        OutlinedTextField(
-            value = domain, onValueChange = { domain = it },
-            label = { Text("Домен (обычно пусто)") }, singleLine = true, modifier = Modifier.fillMaxWidth(),
-        )
+        AppTextField(domain, { domain = it }, label = "Домен (обычно пусто)", modifier = Modifier.fillMaxWidth())
 
         status?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
 
@@ -624,6 +631,7 @@ private const val RECENT_COUNT = 4
 private fun HistoryScreen(onBack: () -> Unit, onPlay: (HistoryEntry) -> Unit) {
     val context = LocalContext.current
     val history = remember { History.get(context) }
+    var query by remember { mutableStateOf("") }
     Column(Modifier.fillMaxSize().safeContentPadding()) {
         Row(
             modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
@@ -631,15 +639,25 @@ private fun HistoryScreen(onBack: () -> Unit, onPlay: (HistoryEntry) -> Unit) {
         ) {
             TextButton(onClick = onBack) { Text("← Назад") }
             Text("История", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
-            if (history.entries.isNotEmpty()) TextButton(onClick = { history.clear() }) { Text("Очистить") }
+            if (history.entries.isNotEmpty()) {
+                AppTextField(query, { query = it }, label = "🔍 Поиск", modifier = Modifier.width(240.dp))
+                TextButton(onClick = { history.clear() }) { Text("Очистить") }
+            }
         }
         HorizontalDivider()
         if (history.entries.isEmpty()) {
             CenterMessage("Здесь появится то, что вы смотрели.") {}
             return
         }
+        val shown = history.entries.filter { TextSearch.matches(it.title, query) }
+        if (shown.isEmpty()) {
+            CenterMessage("Ничего не найдено: «${query.trim()}».") {
+                TextButton(onClick = { query = "" }) { Text("Показать всё") }
+            }
+            return
+        }
         LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-            items(history.entries, key = { it.uri.toString() }) { entry ->
+            items(shown, key = { it.uri.toString() }) { entry ->
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Box(Modifier.weight(1f)) { HistoryRow(entry) { onPlay(entry) } }
                     TextButton(onClick = { history.remove(entry.uri) }) { Text("✕") }

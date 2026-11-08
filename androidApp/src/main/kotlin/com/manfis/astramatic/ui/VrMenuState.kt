@@ -59,6 +59,9 @@ class VrMenuState {
 
     val library = LibraryState()
 
+    /** Клавиатура шлема: открыта, пока в поле что-то набирают. */
+    val keyboard = VrKeyboardState()
+
     /** Сейчас виден сам хаб: в шлеме он парит без общего фона. */
     val showingHub get() = stereo && mode == Mode.Menu && tab == Tab.Home && library.atRoot
 }

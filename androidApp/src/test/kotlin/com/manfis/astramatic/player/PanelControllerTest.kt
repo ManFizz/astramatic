@@ -877,4 +877,33 @@ class PanelControllerTest {
 
         assertEquals(PanelPlace.Vr, host.place)
     }
+
+    // --- Клавиатура: NAV-18 ---------------------------------------------------------------------------
+
+    private fun openKeyboard() {
+        menu.keyboard.open(com.manfis.astramatic.ui.KeyboardTarget("Поле", text = { "" }, onTextChange = {}))
+    }
+
+    @Test
+    fun `back closes the keyboard first`() {
+        videoOpen()
+        panels.showMenu(VrMenuState.Tab.Home)
+        openKeyboard()
+
+        panels.goBack()
+
+        assertFalse(menu.keyboard.isOpen)
+        assertEquals(0, hubs)
+        assertEquals(PanelPlace.Vr, host.place)
+    }
+
+    @Test
+    fun `closing the panel closes the keyboard`() {
+        panels.showMenu(VrMenuState.Tab.Home)
+        openKeyboard()
+
+        panels.hide()
+
+        assertFalse(menu.keyboard.isOpen)
+    }
 }

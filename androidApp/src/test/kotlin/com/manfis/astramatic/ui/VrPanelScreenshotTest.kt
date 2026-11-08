@@ -7,6 +7,9 @@ import androidx.compose.foundation.layout.requiredSize
 import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.assertIsEnabled
+import kotlin.test.assertFalse
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
@@ -166,6 +169,54 @@ class VrPanelScreenshotTest {
         }
         compose.waitForIdle()
         compose.onNodeWithTag(PANEL).captureRoboImage("src/test/screenshots/$name.png")
+    }
+
+    /** Редактор папки в шлеме, клавиатура открыта нажатием на поле. */
+    private fun editorWithKeyboard(): VrMenuState {
+        val state = VrMenuState()
+        state.library.backStack.add(Screen.EditServer(null))
+        compose.setContent { PanelFrame(PanelLayout.Menu.visibleHeightPx) { VrMenu(state, actions) } }
+        compose.onNodeWithText("Адрес общей папки").performClick()
+        compose.waitForIdle()
+        return state
+    }
+
+    private fun key(label: String) = compose.onNodeWithTag("key:$label").performClick()
+
+    @Test
+    fun keyboardRu() {
+        val state = editorWithKeyboard()
+        listOf("п", "р", "и", "в").forEach { key(it) }
+        compose.waitForIdle()
+        assertEquals("прив", state.keyboard.text)
+        compose.onNodeWithTag(PANEL).captureRoboImage("src/test/screenshots/vr_keyboard_ru.png")
+    }
+
+    @Test
+    fun keyboardSymbols() {
+        val state = editorWithKeyboard()
+        key("?123")
+        listOf("\\", "\\").forEach { key(it) }
+        compose.waitForIdle()
+        assertEquals("\\\\", state.keyboard.text)
+        compose.onNodeWithTag(PANEL).captureRoboImage("src/test/screenshots/vr_keyboard_symbols.png")
+    }
+
+    @Test
+    fun keyboardWritesIntoTheField() {
+        val state = editorWithKeyboard()
+        key("?123")
+        listOf("\\", "\\").forEach { key(it) }
+        key("АБВ")
+        key("🌐")
+        listOf("p", "c", "?123", "\\", "ABC", "v").forEach { key(it) }
+        assertEquals("""\\pc\v""", state.keyboard.text)
+        key("Готово")
+        compose.waitForIdle()
+
+        assertFalse(state.keyboard.isOpen)
+        // Адрес разобрался: «Сохранить» доступна.
+        compose.onNodeWithText("Сохранить").assertIsEnabled()
     }
 
     @Test

@@ -28,6 +28,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -42,7 +44,10 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
+import com.manfis.astramatic.library.DarkframeServer
+import com.manfis.astramatic.library.DesktopServer
 import com.manfis.astramatic.library.MediaLibrary
+import com.manfis.astramatic.library.SmbServer
 import com.manfis.astramatic.library.MediaSourceRef
 import com.manfis.astramatic.player.HistoryEntry
 
@@ -57,17 +62,39 @@ class HubChrome(
 )
 
 /** Откуда смотреть: телефон, компьютер, Darkframe. */
-internal class HubSource(val icon: String, val title: String, val subtitle: String?, val onClick: () -> Unit)
+internal class HubSource(
+    val icon: String,
+    val title: String,
+    val subtitle: String?,
+    /** Изменить или удалить; у телефона нет. */
+    val onEdit: (() -> Unit)? = null,
+    val onClick: () -> Unit,
+)
+
+/** Добавить источник: в шлеме теперь есть клавиатура. */
+internal class HubAdd(val onDesktop: () -> Unit, val onFolder: () -> Unit, val onDarkframe: () -> Unit)
 
 @Composable
-internal fun rememberHubSources(library: MediaLibrary, onOpen: (MediaSourceRef, String) -> Unit): List<HubSource> {
+internal fun rememberHubSources(
+    library: MediaLibrary,
+    onOpen: (MediaSourceRef, String) -> Unit,
+    onEditServer: (SmbServer) -> Unit,
+    onEditDesktop: (DesktopServer) -> Unit,
+    onEditDarkframe: (DarkframeServer) -> Unit,
+): List<HubSource> {
     val context = LocalContext.current
     return remember(context) {
         buildList {
             add(HubSource("📱", "Этот телефон", "Видео и фото") { onOpen(MediaSourceRef.Phone, "Телефон") })
-            library.servers.all().forEach { add(HubSource("🖥", it.title, "Папка Windows") { onOpen(MediaSourceRef.Smb(it.id), it.title) }) }
-            library.desktops.all().forEach { add(HubSource("💻", it.name, "AstraMatic на ПК") { onOpen(MediaSourceRef.Desktop(it.id), it.name) }) }
-            library.darkframes.all().forEach { add(HubSource("🖼", it.name, "Darkframe") { onOpen(MediaSourceRef.Darkframe(it.id), it.name) }) }
+            library.servers.all().forEach {
+                add(HubSource("🖥", it.title, "Папка Windows", onEdit = { onEditServer(it) }) { onOpen(MediaSourceRef.Smb(it.id), it.title) })
+            }
+            library.desktops.all().forEach {
+                add(HubSource("💻", it.name, "AstraMatic на ПК", onEdit = { onEditDesktop(it) }) { onOpen(MediaSourceRef.Desktop(it.id), it.name) })
+            }
+            library.darkframes.all().forEach {
+                add(HubSource("🖼", it.name, "Darkframe", onEdit = { onEditDarkframe(it) }) { onOpen(MediaSourceRef.Darkframe(it.id), it.name) })
+            }
         }
     }
 }
@@ -89,6 +116,7 @@ internal fun HubHome(
     recent: List<HistoryEntry>,
     onPlayRecent: (HistoryEntry) -> Unit,
     onOpenHistory: () -> Unit,
+    add: HubAdd? = null,
 ) {
     val parked = chrome.parkedTitle
     // Большая плитка — то, что отложено, или последнее просмотренное.
@@ -105,14 +133,7 @@ internal fun HubHome(
                 contentPadding = PaddingValues(vertical = 2.dp),
             ) {
                 items(sources) { SourceTile(it) }
-                item {
-                    Text(
-                        "Добавить компьютер можно в 2D-режиме — там работает клавиатура.",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.55f),
-                        modifier = Modifier.padding(horizontal = 6.dp),
-                    )
-                }
+                if (add != null) item { AddSource(add) }
             }
             if (chrome.videoOpen) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -245,7 +266,30 @@ private fun SourceTile(source: HubSource) {
                     )
                 }
             }
+            source.onEdit?.let { edit ->
+                Box(
+                    Modifier.size(38.dp).clip(CircleShape).background(Color(0x22FFFFFF)).clickable(onClick = edit),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("✎", style = MaterialTheme.typography.titleMedium)
+                }
+            }
         }
+    }
+}
+
+/** «Добавить источник» раскрывается в три варианта. */
+@Composable
+private fun AddSource(add: HubAdd) {
+    var open by remember { mutableStateOf(false) }
+    if (!open) {
+        HubPill("+ Добавить источник", Modifier.fillMaxWidth()) { open = true }
+        return
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        HubPill("💻 Компьютер с AstraMatic", Modifier.fillMaxWidth(), onClick = add.onDesktop)
+        HubPill("🖥 Папка Windows", Modifier.fillMaxWidth(), onClick = add.onFolder)
+        HubPill("🖼 Darkframe", Modifier.fillMaxWidth(), onClick = add.onDarkframe)
     }
 }
 

@@ -109,7 +109,7 @@ internal fun MenuContent(state: VrMenuState, actions: VrMenuActions) {
                     onPlay = actions::play,
                     state = state.library,
                     embedded = true,
-                    allowEditing = !state.stereo,
+                    allowEditing = true,
                     hub = if (state.stereo) {
                         HubChrome(
                             parkedTitle = parked,
