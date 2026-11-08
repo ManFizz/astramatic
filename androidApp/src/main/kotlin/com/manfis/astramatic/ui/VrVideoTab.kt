@@ -1,5 +1,9 @@
 package com.manfis.astramatic.ui
 
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.CenterFocusStrong
+import androidx.compose.material.icons.rounded.RestartAlt
+import androidx.compose.material.icons.rounded.Panorama
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -35,31 +39,15 @@ internal fun VideoTab(state: VrMenuState, actions: VrMenuActions) {
     val format = state.format
 
     Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 28.dp, vertical = 20.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text(state.title ?: "", style = MaterialTheme.typography.titleLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
 
-        Text("Проекция", style = MaterialTheme.typography.titleMedium)
-        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Projection.entries.forEach {
-                FilterChip(
-                    selected = format.projection == it,
-                    onClick = { actions.setFormat(format.copy(projection = it)) },
-                    label = { Text(projectionLabel(it)) },
-                )
-            }
-        }
-        Text("Стерео", style = MaterialTheme.typography.titleMedium)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            StereoLayout.entries.forEach {
-                FilterChip(
-                    selected = format.stereo == it,
-                    onClick = { actions.setFormat(format.copy(stereo = it)) },
-                    label = { Text(stereoLabel(it)) },
-                )
-            }
-        }
+        SectionTitle("Проекция")
+        Segmented(Projection.entries, format.projection, ::projectionLabel, { actions.setFormat(format.copy(projection = it)) })
+        SectionTitle("Стерео")
+        Segmented(StereoLayout.entries, format.stereo, ::stereoLabel, { actions.setFormat(format.copy(stereo = it)) })
 
         if (format.projection == Projection.Dome180 || format.projection == Projection.Fisheye) {
             LabeledSlider(
@@ -80,7 +68,7 @@ internal fun VideoTab(state: VrMenuState, actions: VrMenuActions) {
             ) { actions.setFormat(format.copy(tiltDeg = it.roundToInt())) }
         }
         if (format.projection == Projection.Flat) {
-            Text("Экран кинотеатра", style = MaterialTheme.typography.titleMedium)
+            SectionTitle("Экран кинотеатра")
             LabeledSlider(
                 title = "Высота экрана: ${"%.1f".format(settings.screenHeight)} м",
                 hint = null,
@@ -104,7 +92,7 @@ internal fun VideoTab(state: VrMenuState, actions: VrMenuActions) {
             ) { settings.screenCurve = it }
         }
 
-        HorizontalDivider(Modifier.padding(vertical = 4.dp))
+        Divider(Modifier.padding(vertical = 4.dp))
         LabeledSlider(
             title = "Приближение: ${"%.1f".format(state.zoom)}×",
             hint = "Только для этого файла. Меню не приближается.",
@@ -120,33 +108,19 @@ internal fun VideoTab(state: VrMenuState, actions: VrMenuActions) {
             step = 0.05f,
         ) { settings.brightness = it }
         if (!state.isImage) {
-            Text("Скорость", style = MaterialTheme.typography.titleMedium)
-            Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                SPEEDS.forEach { speed ->
-                    FilterChip(
-                        selected = state.speed == speed,
-                        onClick = { actions.setSpeed(speed) },
-                        label = { Text("${speed}×".replace(".0×", "×")) },
-                    )
-                }
-            }
+            SectionTitle("Скорость")
+            Segmented(SPEEDS, state.speed, ::speedLabel, actions::setSpeed)
         }
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = actions::recenterAfterCountdown) { Text("Рецентр") }
-            OutlinedButton(onClick = actions::resetFormat) { Text("Формат по имени файла") }
+            AppButton("Рецентр", actions::recenterAfterCountdown, icon = Icons.Rounded.CenterFocusStrong)
+            AppButton("Формат по имени файла", actions::resetFormat, icon = Icons.Rounded.RestartAlt)
         }
         if (state.isImage) {
             var note by remember { mutableStateOf<String?>(null) }
-            OutlinedButton(onClick = { note = actions.setAsEnvironment() }) { Text("Сделать окружением") }
-            Text(
-                note ?: "Фото-панорама 360° станет окружением вокруг вас (Настройки → Окружение).",
-                style = MaterialTheme.typography.bodySmall,
-            )
+            AppButton("Сделать окружением", { note = actions.setAsEnvironment() }, icon = Icons.Rounded.Panorama)
+            Hint(note ?: "Фото-панорама 360° станет окружением вокруг вас (Настройки → Окружение).")
         }
-        Text(
-            "Формат угадывается по имени файла. Выбранный здесь запоминается для этого файла.",
-            style = MaterialTheme.typography.bodySmall,
-        )
+        Hint("Формат угадывается по имени файла. Выбранный здесь запоминается для этого файла.")
     }
 }

@@ -1,5 +1,16 @@
 package com.manfis.astramatic.ui
 
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.Backspace
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
+import androidx.compose.material.icons.rounded.ArrowUpward
+import androidx.compose.material.icons.rounded.KeyboardCapslock
+import androidx.compose.material.icons.rounded.KeyboardHide
+import androidx.compose.material.icons.rounded.Language
+import androidx.compose.material3.Icon
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -308,7 +319,7 @@ internal fun VrKeyboard(state: VrKeyboardState, modifier: Modifier = Modifier) {
                     .weight(1f)
                     .height(40.dp)
                     .clip(KeyShape)
-                    .background(Color(0x66000000))
+                    .background(Color(0x59000000))
                     .padding(horizontal = 12.dp),
                 contentAlignment = Alignment.CenterStart,
             ) {
@@ -325,10 +336,10 @@ internal fun VrKeyboard(state: VrKeyboardState, modifier: Modifier = Modifier) {
                     overflow = TextOverflow.StartEllipsis,
                 )
             }
-            KeyButton("◀", Modifier.width(48.dp)) { state.moveCursor(-1) }
-            KeyButton("▶", Modifier.width(48.dp)) { state.moveCursor(1) }
-            KeyButton("Стереть", Modifier.width(92.dp)) { state.clear() }
-            KeyButton("Скрыть", Modifier.width(88.dp)) { state.close() }
+            KeyButton("", Modifier.width(52.dp), icon = Icons.AutoMirrored.Rounded.KeyboardArrowLeft) { state.moveCursor(-1) }
+            KeyButton("", Modifier.width(52.dp), icon = Icons.AutoMirrored.Rounded.KeyboardArrowRight) { state.moveCursor(1) }
+            KeyButton("Стереть", Modifier.width(104.dp)) { state.clear() }
+            KeyButton("Скрыть", Modifier.width(104.dp), icon = Icons.Rounded.KeyboardHide) { state.close() }
         }
         state.rows().forEach { row ->
             Row(horizontalArrangement = Arrangement.spacedBy(5.dp)) {
@@ -340,25 +351,48 @@ internal fun VrKeyboard(state: VrKeyboardState, modifier: Modifier = Modifier) {
 
 @Composable
 private fun RowScope.KeyCell(state: VrKeyboardState, key: Key) {
+    val icon = when (key) {
+        Key.Backspace -> Icons.AutoMirrored.Rounded.Backspace
+        Key.ShiftKey -> if (state.shift == Shift.Locked) Icons.Rounded.KeyboardCapslock else Icons.Rounded.ArrowUpward
+        Key.Language -> Icons.Rounded.Language
+        else -> null
+    }
     val label = when {
         key is Key.Char && state.shift != Shift.Off -> key.char.uppercase()
         key == Key.Language -> if (state.layout == KeyboardLayout.En) "RU" else "EN"
-        key == Key.ShiftKey && state.shift == Shift.Locked -> "⇪"
+        icon != null -> ""
         else -> key.label
     }
     val accent = key == Key.Done || (key == Key.ShiftKey && state.shift != Shift.Off)
-    KeyButton(label, Modifier.weight(key.weight).testTag("key:${key.label}"), accent = accent) { state.press(key) }
+    val service = key !is Key.Char || key.label.length > 1
+    KeyButton(
+        label,
+        Modifier.weight(key.weight).testTag("key:${key.label}"),
+        accent = accent,
+        icon = icon,
+        service = service && key != Key.Space,
+    ) { state.press(key) }
 }
 
 @Composable
-private fun KeyButton(label: String, modifier: Modifier, accent: Boolean = false, onClick: () -> Unit) {
+private fun KeyButton(
+    label: String,
+    modifier: Modifier,
+    accent: Boolean = false,
+    icon: ImageVector? = null,
+    /** Служебная клавиша: чуть темнее букв, чтобы буквы читались группой. */
+    service: Boolean = true,
+    onClick: () -> Unit,
+) {
     val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     val colors = MaterialTheme.colorScheme
     val background = when {
+        accent && hovered -> Color.White
         accent -> colors.primary
-        hovered -> colors.primaryContainer
-        else -> Color(0x3DFFFFFF)
+        hovered -> Color(0x4DFFFFFF)
+        service -> Color(0x17FFFFFF)
+        else -> Color(0x29FFFFFF)
     }
     Box(
         modifier
@@ -368,11 +402,18 @@ private fun KeyButton(label: String, modifier: Modifier, accent: Boolean = false
             .clickable(interactionSource = interaction, indication = null, onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            label,
-            style = MaterialTheme.typography.titleMedium,
-            color = if (accent) colors.onPrimary else colors.onSurface,
-            maxLines = 1,
-        )
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            if (icon != null) {
+                Icon(icon, contentDescription = null, tint = if (accent) colors.onPrimary else colors.onSurface, modifier = Modifier.size(22.dp))
+            }
+            if (label.isNotEmpty()) {
+                Text(
+                    label,
+                    style = if (label.length == 1) MaterialTheme.typography.titleMedium else MaterialTheme.typography.labelLarge,
+                    color = if (accent) colors.onPrimary else colors.onSurface,
+                    maxLines = 1,
+                )
+            }
+        }
     }
 }

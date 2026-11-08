@@ -1,5 +1,31 @@
 package com.manfis.astramatic.ui
 
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.RowScope
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Computer
+import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.DeleteSweep
+import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.FileOpen
+import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.Image
+import androidx.compose.material.icons.rounded.Language
+import androidx.compose.material.icons.rounded.Movie
+import androidx.compose.material.icons.rounded.PhoneAndroid
+import androidx.compose.material.icons.rounded.PhotoLibrary
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.ViewInAr
+import androidx.compose.material3.Icon
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.vector.ImageVector
 import android.Manifest
 import android.content.Context
 import android.content.Intent
@@ -292,90 +318,109 @@ private fun HomeScreen(
             Text(
                 LocalVersionText.current,
                 style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
 
         if (settings.keepHistory && history.entries.isNotEmpty()) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Недавние", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                TextButton(onClick = onOpenHistory) { Text("Вся история →") }
+                SectionTitle("Недавние", Modifier.weight(1f))
+                AppButton("Вся история", onOpenHistory, icon = Icons.Rounded.ChevronRight, style = ButtonStyle.Ghost)
             }
             history.entries.take(RECENT_COUNT).forEach { HistoryRow(it) { onPlayHistory(it) } }
-            HorizontalDivider(Modifier.padding(vertical = 8.dp))
         }
 
-        Text("Источники", style = MaterialTheme.typography.titleMedium)
-        SourceRow("📱", "Видео и фото на телефоне", null) { onOpen(MediaSourceRef.Phone, "Телефон") }
-        SourceRow("🌐", "Браузер", "Сайты и поиск") { onOpenBrowser() }
+        SectionTitle("Источники")
+        SourceRow(Icons.Rounded.PhoneAndroid, "Видео и фото на телефоне", null) { onOpen(MediaSourceRef.Phone, "Телефон") }
+        SourceRow(Icons.Rounded.Language, "Браузер", "Сайты и поиск") { onOpenBrowser() }
         servers.forEach { server ->
-            SourceRow("🖥", server.title, "${server.host}\\${server.share}", onEdit = { onEditServer(server) }.takeIf { allowEditing }) {
+            SourceRow(Icons.Rounded.Folder, server.title, "${server.host}\\${server.share}", onEdit = { onEditServer(server) }.takeIf { allowEditing }) {
                 onOpen(MediaSourceRef.Smb(server.id), server.title)
             }
         }
         desktops.forEach { server ->
-            SourceRow("💻", server.name, "AstraMatic · ${server.authority}", onEdit = { onEditDesktop(server) }.takeIf { allowEditing }) {
+            SourceRow(Icons.Rounded.Computer, server.name, "AstraMatic · ${server.authority}", onEdit = { onEditDesktop(server) }.takeIf { allowEditing }) {
                 onOpen(MediaSourceRef.Desktop(server.id), server.name)
             }
         }
         darkframes.forEach { server ->
-            SourceRow("🖼", server.name, "Darkframe · ${server.authority}", onEdit = { onEditDarkframe(server) }.takeIf { allowEditing }) {
+            SourceRow(Icons.Rounded.PhotoLibrary, server.name, "Darkframe · ${server.authority}", onEdit = { onEditDarkframe(server) }.takeIf { allowEditing }) {
                 onOpen(MediaSourceRef.Darkframe(server.id), server.name)
             }
         }
         if (allowEditing) {
             Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedButton(onClick = { onEditDesktop(null) }) { Text("+ Компьютер (AstraMatic)") }
-                OutlinedButton(onClick = { onEditServer(null) }) { Text("+ Папка Windows (SMB)") }
-                OutlinedButton(onClick = { onEditDarkframe(null) }) { Text("+ Darkframe") }
-                OutlinedButton(onClick = { picker.launch(arrayOf("video/*", "image/*")) }) { Text("Открыть файл…") }
+                AppButton("Компьютер", { onEditDesktop(null) }, icon = Icons.Rounded.Add)
+                AppButton("Папка Windows", { onEditServer(null) }, icon = Icons.Rounded.Add)
+                AppButton("Darkframe", { onEditDarkframe(null) }, icon = Icons.Rounded.Add)
+                AppButton("Открыть файл", { picker.launch(arrayOf("video/*", "image/*")) }, icon = Icons.Rounded.FileOpen)
             }
-        } else {
-            Text(
-                "Добавить или изменить компьютер можно в 2D-режиме — там работает клавиатура.",
-                style = MaterialTheme.typography.bodySmall,
-            )
         }
-
-        HorizontalDivider(Modifier.padding(vertical = 8.dp))
 
         if (embedded) return@Column
 
-        HorizontalDivider(Modifier.padding(vertical = 8.dp))
+        Divider(Modifier.padding(vertical = 8.dp))
 
-        Button(onClick = { context.startActivity(Intent(context, PlayerActivity::class.java)) }) {
-            Text("Войти в VR")
-        }
+        AppButton(
+            "Войти в VR",
+            { context.startActivity(Intent(context, PlayerActivity::class.java)) },
+            icon = Icons.Rounded.ViewInAr,
+            style = ButtonStyle.Filled,
+            height = 56.dp,
+        )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = { context.startActivity(Intent(context, HeadsetActivity::class.java)) }) {
-                Text("Настроить шлем")
-            }
-            OutlinedButton(onClick = { context.startActivity(Intent(context, SettingsActivity::class.java)) }) {
-                Text("Настройки")
-            }
+            AppButton("Настроить шлем", { context.startActivity(Intent(context, HeadsetActivity::class.java)) }, icon = Icons.Rounded.Tune)
+            AppButton("Настройки", { context.startActivity(Intent(context, SettingsActivity::class.java)) }, icon = Icons.Rounded.Settings)
         }
-        Text(
+        Hint(
             "В плеере: нажатие — полоска управления, долгое нажатие — рецентр, кнопка 2D/VR сверху — " +
                 "переключение режима, шестерёнка — настройка шлема.\n" +
-                "Кнопки и стики пульта назначаются в плеере: меню → «🎮 Пульт».",
-            style = MaterialTheme.typography.bodySmall,
+                "Кнопки и стики пульта назначаются в плеере: меню → «Пульт».",
         )
     }
 }
 
 @Composable
-private fun SourceRow(icon: String, title: String, subtitle: String?, onEdit: (() -> Unit)? = null, onClick: () -> Unit) {
+private fun SourceRow(icon: ImageVector, title: String, subtitle: String?, onEdit: (() -> Unit)? = null, onClick: () -> Unit) {
+    ListRow(onClick) {
+        IconTile(icon)
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            if (subtitle != null) Hint(subtitle)
+        }
+        if (onEdit != null) AppIconButton(Icons.Rounded.Edit, "Изменить", onEdit)
+    }
+}
+
+/** Строка списка: плашка с подсветкой под взглядом. */
+@Composable
+private fun ListRow(onClick: () -> Unit, content: @Composable RowScope.() -> Unit) {
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by hoverState(interaction)
     Row(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 8.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(MaterialTheme.shapes.medium)
+            .background(if (hovered) CardHover else CardColor)
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .padding(horizontal = 12.dp, vertical = 10.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(14.dp),
+        content = content,
+    )
+}
+
+/** Шапка экрана библиотеки: назад, заголовок, справа — поиск и действия. */
+@Composable
+private fun ScreenHeader(title: String, onBack: () -> Unit, actions: @Composable RowScope.() -> Unit = {}) {
+    Row(
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text(icon, style = MaterialTheme.typography.headlineSmall)
-        Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge)
-            if (subtitle != null) Text(subtitle, style = MaterialTheme.typography.bodySmall)
-        }
-        if (onEdit != null) TextButton(onClick = onEdit) { Text("Изменить") }
+        AppIconButton(Icons.AutoMirrored.Rounded.ArrowBack, "Назад", onBack, style = ButtonStyle.Tonal)
+        Text(title, style = MaterialTheme.typography.titleLarge, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+        actions()
     }
 }
 
@@ -418,33 +463,22 @@ private fun BrowseScreen(
     }
 
     Column(Modifier.fillMaxSize().safeContentPadding()) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            TextButton(onClick = onBack) { Text("← Назад") }
-            Text(
-                screen.title,
-                style = MaterialTheme.typography.titleLarge,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f),
-            )
+        ScreenHeader(screen.title, onBack) {
             if (!entries.isNullOrEmpty()) {
-                AppTextField(query, { query = it }, label = "🔍 Поиск в папке", modifier = Modifier.width(260.dp))
+                AppTextField(query, { query = it }, label = "Поиск в папке", modifier = Modifier.width(280.dp))
             }
         }
-        HorizontalDivider()
+        Divider()
 
         val list = entries
         val shown = list?.filter { TextSearch.matches(it.name, query) }
         when {
             needsPermission -> CenterMessage("Нужен доступ к видео и фото на телефоне.") {
-                Button(onClick = { permission.launch(MEDIA_PERMISSIONS) }) { Text("Разрешить") }
+                AppButton("Разрешить", { permission.launch(MEDIA_PERMISSIONS) }, style = ButtonStyle.Filled)
             }
 
             error != null -> CenterMessage(error!!) {
-                Button(onClick = { reload++ }) { Text("Повторить") }
+                AppButton("Повторить", { reload++ }, icon = Icons.Rounded.Refresh)
             }
 
             list == null -> CenterMessage("Загрузка…") { CircularProgressIndicator() }
@@ -452,48 +486,34 @@ private fun BrowseScreen(
             list.isEmpty() -> CenterMessage("Здесь нет папок, видео и фото.") {}
 
             shown.isNullOrEmpty() -> CenterMessage("Ничего не найдено: «${query.trim()}».") {
-                TextButton(onClick = { query = "" }) { Text("Показать всё") }
+                AppButton("Показать всё", { query = "" })
             }
 
             // Список для «следующий / предыдущий» — вся папка, а не только найденное.
-            else -> LazyColumn(Modifier.fillMaxSize()) {
+            else -> LazyColumn(
+                Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
                 items(shown, key = { it.path }) { entry ->
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { if (entry.isDirectory) onOpenFolder(entry) else onPlay(entry, list) }
-                            .padding(horizontal = 16.dp, vertical = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        if (entry.thumbnail != null) {
-                            AsyncImage(
-                                model = entry.thumbnail,
-                                contentDescription = null,
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier.size(width = 96.dp, height = 54.dp).clip(RoundedCornerShape(6.dp)),
-                            )
-                        } else {
-                            Text(
-                                when {
-                                    entry.isDirectory -> "📁"
-                                    entry.isImage -> "🖼"
-                                    else -> "🎬"
-                                },
-                                style = MaterialTheme.typography.titleLarge,
-                            )
-                        }
+                    ListRow({ if (entry.isDirectory) onOpenFolder(entry) else onPlay(entry, list) }) {
+                        Preview(
+                            entry.thumbnail,
+                            when {
+                                entry.isDirectory -> Icons.Rounded.Folder
+                                entry.isImage -> Icons.Rounded.Image
+                                else -> Icons.Rounded.Movie
+                            },
+                        )
                         Column(Modifier.weight(1f)) {
-                            Text(entry.name, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            Text(entry.name, style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
                             if (!entry.isDirectory) {
                                 val format = VideoFormatDetector.detect(entry.formatHint)
                                 val details = listOfNotNull(
                                     formatSize(entry.size).takeIf { entry.size > 0 },
                                     format?.let { "${projectionLabel(it.projection)} ${stereoLabel(it.stereo)}" },
                                 )
-                                if (details.isNotEmpty()) {
-                                    Text(details.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
-                                }
+                                if (details.isNotEmpty()) Hint(details.joinToString(" · "))
                             }
                         }
                     }
@@ -510,7 +530,7 @@ private fun CenterMessage(text: String, action: @Composable () -> Unit) {
         verticalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterVertically),
         horizontalAlignment = Alignment.CenterHorizontally,
     ) {
-        Text(text)
+        Text(text, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onSurfaceVariant)
         action()
     }
 }
@@ -576,46 +596,36 @@ private fun EditServerScreen(
             modifier = Modifier.fillMaxWidth(),
             isError = address.isNotBlank() && parsed == null,
         )
-        Text(
+        Hint(
             "Имя компьютера или IP и имя общей папки. Папку нужно открыть для общего доступа в Windows: " +
                 "свойства папки → Доступ.",
-            style = MaterialTheme.typography.bodySmall,
         )
         AppTextField(name, { name = it }, label = "Название (необязательно)", modifier = Modifier.fillMaxWidth())
         AppTextField(user, { user = it }, label = "Пользователь Windows", modifier = Modifier.fillMaxWidth())
         AppTextField(password, { password = it }, label = "Пароль", modifier = Modifier.fillMaxWidth(), secret = true)
-        Text(
+        Hint(
             "Если вход в Windows через учётную запись Microsoft — укажите её почту и пароль от неё (не PIN-код). " +
                 "Пусто — гостевой вход.",
-            style = MaterialTheme.typography.bodySmall,
         )
         AppTextField(domain, { domain = it }, label = "Домен (обычно пусто)", modifier = Modifier.fillMaxWidth())
 
         status?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-            Button(enabled = parsed != null, onClick = { build()?.let(onSave) }) { Text("Сохранить") }
-            OutlinedButton(enabled = parsed != null && !checking, onClick = { checkRequest++ }) { Text("Проверить") }
-            if (checking) CircularProgressIndicator()
+            AppButton("Сохранить", { build()?.let(onSave) }, style = ButtonStyle.Filled, enabled = parsed != null)
+            AppButton("Проверить", { checkRequest++ }, enabled = parsed != null && !checking)
+            if (checking) CircularProgressIndicator(color = MaterialTheme.colorScheme.onSurface)
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextButton(onClick = onCancel) { Text("Отмена") }
-            if (initial != null) TextButton(onClick = { onDelete(initial) }) { Text("Удалить") }
+            AppButton("Отмена", onCancel, style = ButtonStyle.Ghost)
+            if (initial != null) AppButton("Удалить", { onDelete(initial) }, icon = Icons.Rounded.Delete, style = ButtonStyle.Ghost)
         }
     }
 }
 
 @Composable
 private fun <T> OptionRow(options: List<T>, selected: T, label: (T) -> String, onSelect: (T) -> Unit) {
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        options.forEach { option ->
-            FilterChip(
-                selected = option == selected,
-                onClick = { onSelect(option) },
-                label = { Text(label(option)) },
-            )
-        }
-    }
+    Segmented(options, selected, label, onSelect)
 }
 
 fun projectionLabel(projection: Projection) = when (projection) {
@@ -652,18 +662,13 @@ private fun HistoryScreen(onBack: () -> Unit, onPlay: (HistoryEntry) -> Unit) {
     val history = remember { History.get(context) }
     var query by remember { mutableStateOf("") }
     Column(Modifier.fillMaxSize().safeContentPadding()) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            TextButton(onClick = onBack) { Text("← Назад") }
-            Text("История", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
+        ScreenHeader("История", onBack) {
             if (history.entries.isNotEmpty()) {
-                AppTextField(query, { query = it }, label = "🔍 Поиск", modifier = Modifier.width(240.dp))
-                TextButton(onClick = { history.clear() }) { Text("Очистить") }
+                AppTextField(query, { query = it }, label = "Поиск", modifier = Modifier.width(240.dp))
+                AppButton("Очистить", { history.clear() }, icon = Icons.Rounded.DeleteSweep, style = ButtonStyle.Ghost)
             }
         }
-        HorizontalDivider()
+        Divider()
         if (history.entries.isEmpty()) {
             CenterMessage("Здесь появится то, что вы смотрели.") {}
             return
@@ -671,16 +676,17 @@ private fun HistoryScreen(onBack: () -> Unit, onPlay: (HistoryEntry) -> Unit) {
         val shown = history.entries.filter { TextSearch.matches(it.title, query) }
         if (shown.isEmpty()) {
             CenterMessage("Ничего не найдено: «${query.trim()}».") {
-                TextButton(onClick = { query = "" }) { Text("Показать всё") }
+                AppButton("Показать всё", { query = "" })
             }
             return
         }
-        LazyColumn(Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
+        LazyColumn(
+            Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
             items(shown, key = { it.uri.toString() }) { entry ->
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.weight(1f)) { HistoryRow(entry) { onPlay(entry) } }
-                    TextButton(onClick = { history.remove(entry.uri) }) { Text("✕") }
-                }
+                HistoryRow(entry, onRemove = { history.remove(entry.uri) }) { onPlay(entry) }
             }
         }
     }
@@ -688,37 +694,44 @@ private fun HistoryScreen(onBack: () -> Unit, onPlay: (HistoryEntry) -> Unit) {
 
 /** Строка истории: превью, название, докуда досмотрено и когда. */
 @Composable
-private fun HistoryRow(entry: HistoryEntry, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Box(Modifier.size(width = 96.dp, height = 54.dp).clip(RoundedCornerShape(6.dp))) {
-            if (entry.thumbnail != null) {
-                AsyncImage(
-                    model = entry.thumbnail, contentDescription = null, contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            } else {
-                Text(if (entry.isImage) "🖼" else "🎬", Modifier.align(Alignment.Center), style = MaterialTheme.typography.titleLarge)
-            }
+private fun HistoryRow(entry: HistoryEntry, onRemove: (() -> Unit)? = null, onClick: () -> Unit) {
+    ListRow(onClick) {
+        Box {
+            Preview(entry.thumbnail, if (entry.isImage) Icons.Rounded.Image else Icons.Rounded.Movie)
             // Полоска «досмотрено» внизу превью.
             if (!entry.isImage && entry.durationMs > 0) {
                 val progress = (entry.positionMs.toFloat() / entry.durationMs).coerceIn(0f, 1f)
                 Box(
-                    Modifier.align(Alignment.BottomStart).fillMaxWidth(progress).height(3.dp)
+                    Modifier.align(Alignment.BottomStart).padding(horizontal = 6.dp, vertical = 4.dp)
+                        .size(width = 84.dp * progress, height = 3.dp)
+                        .clip(RoundedCornerShape(2.dp))
                         .background(MaterialTheme.colorScheme.primary),
                 )
             }
         }
         Column(Modifier.weight(1f)) {
-            Text(entry.title, maxLines = 2, overflow = TextOverflow.Ellipsis)
+            Text(entry.title, style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
             val details = listOfNotNull(
                 if (!entry.isImage && entry.durationMs > 0) "${clock(entry.positionMs)} из ${clock(entry.durationMs)}" else null,
                 DateUtils.getRelativeTimeSpanString(entry.watchedAt).toString(),
             )
-            Text(details.joinToString(" · "), style = MaterialTheme.typography.bodySmall)
+            Hint(details.joinToString(" · "))
+        }
+        if (onRemove != null) AppIconButton(Icons.Rounded.Close, "Убрать из истории", onRemove)
+    }
+}
+
+/** Превью 16:9 или значок на плашке, если превью нет. */
+@Composable
+private fun Preview(thumbnail: String?, icon: ImageVector) {
+    Box(
+        Modifier.size(width = 96.dp, height = 54.dp).clip(RoundedCornerShape(10.dp)).background(Color(0x1FFFFFFF)),
+        contentAlignment = Alignment.Center,
+    ) {
+        if (thumbnail != null) {
+            AsyncImage(model = thumbnail, contentDescription = null, contentScale = ContentScale.Crop, modifier = Modifier.fillMaxSize())
+        } else {
+            Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(26.dp))
         }
     }
 }

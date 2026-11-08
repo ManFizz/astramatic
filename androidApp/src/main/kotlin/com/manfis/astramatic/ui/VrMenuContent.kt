@@ -1,5 +1,11 @@
 package com.manfis.astramatic.ui
 
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Settings
+import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -41,9 +47,9 @@ internal fun MenuContent(state: VrMenuState, actions: VrMenuActions) {
                 shape = RoundedCornerShape(12.dp),
                 modifier = Modifier.fillMaxWidth().padding(start = 12.dp, end = 12.dp, top = 12.dp),
             ) {
-                Row(Modifier.padding(start = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.padding(start = 18.dp, end = 4.dp, top = 4.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text(notice, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
-                    TextButton(onClick = { state.notice = null }) { Text("✕") }
+                    AppIconButton(Icons.Rounded.Close, "Закрыть", { state.notice = null })
                 }
             }
         }
@@ -59,7 +65,7 @@ internal fun MenuContent(state: VrMenuState, actions: VrMenuActions) {
             }
         }
         if (!hub) Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
@@ -67,42 +73,48 @@ internal fun MenuContent(state: VrMenuState, actions: VrMenuActions) {
                 Text("AstraMatic", style = MaterialTheme.typography.titleLarge, modifier = Modifier.padding(start = 8.dp))
                 Spacer(Modifier.weight(1f))
             } else {
-                TextButton(onClick = goHome) { Text("← Главная") }
-                // Разделы настроек — вкладками; прокручиваются вбок, если не влезают.
-                Row(
-                    modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
+                AppIconButton(Icons.AutoMirrored.Rounded.ArrowBack, "Главная", goHome, style = ButtonStyle.Tonal)
+                Row(Modifier.weight(1f), verticalAlignment = Alignment.CenterVertically) {
                     if (state.tab == VrMenuState.Tab.Video) {
-                        Text("Формат видео", style = MaterialTheme.typography.titleMedium)
+                        Text("Формат видео", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(start = 8.dp))
                     } else {
-                        TabChip(state, VrMenuState.Tab.Settings, "⚙ Общие")
-                        TabChip(state, VrMenuState.Tab.Headset, "👓 Шлем")
-                        TabChip(state, VrMenuState.Tab.Remote, "🎮 Пульт")
+                        // Разделы настроек — один выбор из трёх.
+                        Segmented(
+                            listOf(VrMenuState.Tab.Settings, VrMenuState.Tab.Headset, VrMenuState.Tab.Remote),
+                            state.tab,
+                            {
+                                when (it) {
+                                    VrMenuState.Tab.Headset -> "Шлем"
+                                    VrMenuState.Tab.Remote -> "Пульт"
+                                    else -> "Общие"
+                                }
+                            },
+                            { state.tab = it },
+                        )
                     }
                 }
             }
             if (state.title != null) {
-                if (home) OutlinedButton(onClick = { state.tab = VrMenuState.Tab.Video }) { Text("Формат") }
-                Button(onClick = actions::hide) { Text("▶ К видео") }
+                if (home) AppButton("Формат", { state.tab = VrMenuState.Tab.Video }, icon = Icons.Rounded.Tune)
+                AppButton("К видео", actions::hide, icon = Icons.Rounded.PlayArrow, style = ButtonStyle.Filled)
             }
-            if (home) FilledTonalButton(onClick = { state.tab = VrMenuState.Tab.Settings }) { Text("⚙ Настройки") }
+            if (home) AppButton("Настройки", { state.tab = VrMenuState.Tab.Settings }, icon = Icons.Rounded.Settings)
             // Выйти из VR и включить 2D можно только пальцем — крестиком и кнопкой на экране.
             if (!state.stereo) {
-                OutlinedButton(onClick = actions::toggleStereo) { Text("VR") }
-                TextButton(onClick = actions::exit) { Text("Выход") }
+                AppButton("VR", actions::toggleStereo)
+                AppButton("Выход", actions::exit, style = ButtonStyle.Ghost)
             }
         }
-        if (!hub) HorizontalDivider()
+        if (!hub) Divider()
         val parked = state.parkedTitle
         if (!hub && home && parked != null) {
-            Button(
-                onClick = actions::resumeViewing,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-            ) {
-                Text("▶ Продолжить: $parked", maxLines = 1, overflow = TextOverflow.Ellipsis)
-            }
+            AppButton(
+                "Продолжить: $parked",
+                actions::resumeViewing,
+                icon = Icons.Rounded.PlayArrow,
+                style = ButtonStyle.Filled,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+            )
         }
         Box(Modifier.fillMaxWidth().weight(1f)) {
             when (state.tab) {
@@ -126,6 +138,7 @@ internal fun MenuContent(state: VrMenuState, actions: VrMenuActions) {
                 )
                 VrMenuState.Tab.Video -> VideoTab(state, actions)
                 VrMenuState.Tab.Headset -> HeadsetScreen(
+                    header = false,
                     onBack = goHome,
                     onSaved = actions::headsetSaved,
                     closeOnSave = false,
@@ -137,9 +150,4 @@ internal fun MenuContent(state: VrMenuState, actions: VrMenuActions) {
             }
         }
     }
-}
-
-@Composable
-private fun TabChip(state: VrMenuState, tab: VrMenuState.Tab, label: String) {
-    FilterChip(selected = state.tab == tab, onClick = { state.tab = tab }, label = { Text(label) })
 }

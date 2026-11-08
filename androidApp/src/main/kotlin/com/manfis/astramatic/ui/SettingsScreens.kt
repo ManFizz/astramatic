@@ -1,5 +1,14 @@
 package com.manfis.astramatic.ui
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.ui.draw.clip
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.DeleteSweep
+import androidx.compose.material.icons.rounded.RestartAlt
+import androidx.compose.material.icons.rounded.SwapVert
 import com.manfis.astramatic.player.MAX_MENU_DISTANCE
 import com.manfis.astramatic.player.MAX_MENU_SIZE
 import com.manfis.astramatic.player.MIN_MENU_DISTANCE
@@ -16,13 +25,9 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.Slider
-import androidx.compose.material3.Switch
 import androidx.compose.material3.Surface
-import androidx.compose.material3.InputChip
 import androidx.compose.foundation.horizontalScroll
 import com.manfis.astramatic.settings.ActionGroup
-import androidx.compose.material3.FilterChip
 import com.manfis.astramatic.model.Projection
 import com.manfis.astramatic.model.StereoLayout
 import com.manfis.astramatic.model.VideoFormat
@@ -47,10 +52,10 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
     val settings = remember { AppSettings.get(context) }
 
     Column(
-        modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
+        modifier = modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 28.dp, vertical = 20.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
-        Text("Воспроизведение", style = MaterialTheme.typography.titleMedium)
+        SectionTitle("Воспроизведение")
         SwitchRow(
             title = "Продолжать с места остановки",
             hint = "Видео откроется там, где вы его закрыли.",
@@ -68,34 +73,20 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
         ) { settings.autoplayNext = it }
 
         // Включается кнопкой в плеере, здесь — только скорость.
-        Text("Слайд-шоу фото: ${settings.slideshowSeconds} с на кадр")
-        Slider(
+        LabeledSlider(
+            title = "Слайд-шоу фото: ${settings.slideshowSeconds} с на кадр",
+            hint = null,
             value = settings.slideshowSeconds.toFloat(),
-            onValueChange = { settings.slideshowSeconds = it.roundToInt().coerceAtLeast(2) },
-            valueRange = 2f..30f,
-        )
+            range = 2f..30f,
+            step = 1f,
+        ) { settings.slideshowSeconds = it.roundToInt().coerceAtLeast(2) }
 
-        HorizontalDivider()
-
-        Text("Окружение", style = MaterialTheme.typography.titleMedium)
-        Text(
-            "Что вокруг в меню, у плоского экрана и за видео 180°.",
-            style = MaterialTheme.typography.bodySmall,
-        )
-        Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Environment.entries.forEach { environment ->
-                FilterChip(
-                    selected = settings.environment == environment.name,
-                    onClick = { settings.environment = environment.name },
-                    label = { Text(environment.title) },
-                )
-            }
-        }
+        SectionTitle("Окружение")
+        Hint("Что вокруг в меню, у плоского экрана и за видео 180°.")
+        val environment = Environment.entries.find { it.name == settings.environment } ?: Environment.Cinema
+        Segmented(Environment.entries, environment, { it.title }, { settings.environment = it.name })
         if (settings.environment == Environment.Custom.name) {
-            Text(
-                "Откройте фото-панораму 360° и во вкладке «Видео» нажмите «Сделать окружением».",
-                style = MaterialTheme.typography.bodySmall,
-            )
+            Hint("Откройте фото-панораму 360° и в «Формате» нажмите «Сделать окружением».")
         }
         SwitchRow(
             title = "Подсветка в кинозале",
@@ -108,27 +99,21 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
             checked = settings.menuDepthAuto,
         ) { settings.menuDepthAuto = it }
         if (!settings.menuDepthAuto) {
-            Text("Меню: ${"%.1f".format(settings.menuDistance)} м")
-            Slider(
+            LabeledSlider(
+                title = "Расстояние до меню: ${"%.1f".format(settings.menuDistance)} м",
+                hint = "Дальше — меньше сводить глаза при переходе от видео к меню. Размер меню на глаз тот же.",
                 value = settings.menuDistance,
-                onValueChange = { settings.menuDistance = (it * 2).roundToInt() / 2f },
-                valueRange = MIN_MENU_DISTANCE..MAX_MENU_DISTANCE,
-            )
-            Text(
-                "Дальше — меньше сводить глаза при переходе от видео к меню. Размер меню на глаз тот же.",
-                style = MaterialTheme.typography.bodySmall,
-            )
+                range = MIN_MENU_DISTANCE..MAX_MENU_DISTANCE,
+                step = 0.5f,
+            ) { settings.menuDistance = it }
         }
-        Text("Размер меню: ${(settings.menuSize * 100).roundToInt()}%")
-        Slider(
+        LabeledSlider(
+            title = "Размер меню: ${(settings.menuSize * 100).roundToInt()}%",
+            hint = "В шлеме меню растягивается за уголки, а перетаскивается за полоску под ним: наведите точку и держите нажатие.",
             value = settings.menuSize,
-            onValueChange = { settings.menuSize = (it * 20).roundToInt() / 20f },
-            valueRange = MIN_MENU_SIZE..MAX_MENU_SIZE,
-        )
-        Text(
-            "В шлеме меню растягивается за уголки, а перетаскивается за полоску под ним: наведите точку и держите нажатие.",
-            style = MaterialTheme.typography.bodySmall,
-        )
+            range = MIN_MENU_SIZE..MAX_MENU_SIZE,
+            step = 0.05f,
+        ) { settings.menuSize = it }
         SwitchRow(
             title = "Поправка по компасу",
             hint = "Центр не уплывает со временем. Если рядом магниты или железо и картинка медленно плывёт — выключите.",
@@ -140,31 +125,25 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
             checked = settings.recenterPitch,
         ) { settings.recenterPitch = it }
 
-        HorizontalDivider()
-
-        Text("Формат, если не распознан по имени", style = MaterialTheme.typography.titleMedium)
-        Text(
-            "Теги в имени вроде _180_LR, _360, _TB, _3dh определяются автоматически.",
-            style = MaterialTheme.typography.bodySmall,
-        )
+        SectionTitle("Формат, если не распознан по имени")
+        Hint("Теги в имени вроде _180_LR, _360, _TB, _3dh определяются автоматически.")
         DefaultFormatPicker("Видео", settings.defaultVideoFormat) { settings.defaultVideoFormat = it }
         DefaultFormatPicker("Фото", settings.defaultImageFormat) { settings.defaultImageFormat = it }
 
-        HorizontalDivider()
-
-        Text("Шлем без кнопки", style = MaterialTheme.typography.titleMedium)
+        SectionTitle("Шлем без кнопки")
         SwitchRow(
             title = "Нажатие взглядом",
             hint = "Задержите точку на кнопке меню — она нажмётся. Вокруг точки виден отсчёт.",
             checked = settings.dwellClick,
         ) { settings.dwellClick = it }
         if (settings.dwellClick) {
-            Text("Время задержки: ${"%.1f".format(settings.dwellMs / 1000f)} с")
-            Slider(
+            LabeledSlider(
+                title = "Время задержки: ${"%.1f".format(settings.dwellMs / 1000f)} с",
+                hint = null,
                 value = settings.dwellMs.toFloat(),
-                onValueChange = { settings.dwellMs = (it / 100).roundToInt() * 100 },
-                valueRange = 600f..3000f,
-            )
+                range = 600f..3000f,
+                step = 100f,
+            ) { settings.dwellMs = it.roundToInt() }
         }
     }
 }
@@ -173,34 +152,9 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
 private fun DefaultFormatPicker(title: String, encoded: String, onChange: (String) -> Unit) {
     val format = VideoFormat.decode(encoded) ?: VideoFormat()
     Text(title, style = MaterialTheme.typography.bodyLarge)
-    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Projection.entries.forEach {
-            FilterChip(
-                selected = format.projection == it,
-                onClick = { onChange(format.copy(projection = it).encode()) },
-                label = { Text(projectionLabel(it)) },
-            )
-        }
-    }
-    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        StereoLayout.entries.forEach {
-            FilterChip(
-                selected = format.stereo == it,
-                onClick = { onChange(format.copy(stereo = it).encode()) },
-                label = { Text(stereoLabel(it)) },
-            )
-        }
-    }
-}
-
-@Composable
-private fun SwitchRow(title: String, hint: String, checked: Boolean, onChange: (Boolean) -> Unit) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge)
-            Text(hint, style = MaterialTheme.typography.bodySmall)
-        }
-        Switch(checked = checked, onCheckedChange = onChange)
+    Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Segmented(Projection.entries, format.projection, ::projectionLabel, { onChange(format.copy(projection = it).encode()) })
+        Segmented(StereoLayout.entries, format.stereo, ::stereoLabel, { onChange(format.copy(stereo = it).encode()) })
     }
 }
 
@@ -215,19 +169,18 @@ fun RemoteScreen(state: VrMenuState) {
     val bindings = remember { AppSettings.get(context).keys }
 
     Column(
-        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(24.dp),
+        modifier = Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 28.dp, vertical = 20.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        Text("Последнее, что прислал пульт", style = MaterialTheme.typography.titleMedium)
+        SectionTitle("Последнее, что прислал пульт")
         Text(
             state.lastKey ?: "Нажмите кнопку или подвигайте стик",
             style = MaterialTheme.typography.titleLarge,
-            color = MaterialTheme.colorScheme.primary,
+            color = if (state.lastKey != null) Accent else MaterialTheme.colorScheme.onSurfaceVariant,
         )
 
         ActionGroup.entries.forEach { group ->
-            HorizontalDivider(Modifier.padding(vertical = 6.dp))
-            Text(group.title, style = MaterialTheme.typography.titleMedium)
+            SectionTitle(group.title, Modifier.padding(top = 8.dp))
             RemoteAction.entries.filter { it.group == group }.forEach { action ->
                 BindingRow(
                     action,
@@ -239,18 +192,16 @@ fun RemoteScreen(state: VrMenuState) {
             }
         }
 
-        HorizontalDivider(Modifier.padding(vertical = 6.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = { bindings.resetAll() }) { Text("Как было по умолчанию") }
-            OutlinedButton(onClick = { bindings.clearAll() }) { Text("Очистить всё") }
+        Row(Modifier.padding(top = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            AppButton("Как было по умолчанию", { bindings.resetAll() }, icon = Icons.Rounded.RestartAlt)
+            AppButton("Очистить всё", { bindings.clearAll() }, icon = Icons.Rounded.DeleteSweep)
         }
-        Text(
-            "Если ось работает в обратную сторону — нажмите на неё (⇅), ✕ рядом убирает назначение. " +
+        Hint(
+            "Если ось работает в обратную сторону — нажмите на неё, крестик рядом убирает назначение. " +
                 "Одну ось можно назначить и на меню, и на просмотр: стрелки и прокрутка работают, пока открыто меню, " +
                 "перемотка и приближение — когда закрыто. " +
                 "Не назначенные стрелки и OK по-прежнему ходят по меню, «Назад» системы закрывает его. " +
                 "Колесо мыши (пульты в режиме мыши) прокручивает меню.",
-            style = MaterialTheme.typography.bodySmall,
         )
     }
 }
@@ -265,52 +216,40 @@ private fun BindingRow(
 ) {
     // Подсказка — прямо в строке действия: её видно там, куда только что нажали, как бы ни был прокручен список.
     if (capturing) {
-        Surface(color = MaterialTheme.colorScheme.tertiaryContainer, shape = MaterialTheme.shapes.medium) {
-            Row(Modifier.fillMaxWidth().padding(start = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f).padding(vertical = 8.dp)) {
-                    Text(action.title, style = MaterialTheme.typography.bodyLarge, color = MaterialTheme.colorScheme.onTertiaryContainer)
-                    Text(
-                        captureHint(action).replaceFirstChar { it.uppercase() },
-                        style = MaterialTheme.typography.titleMedium,
-                        color = MaterialTheme.colorScheme.onTertiaryContainer,
-                    )
-                }
-                TextButton(onClick = onCancel) { Text("Отмена") }
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .clip(MaterialTheme.shapes.medium)
+                .background(MaterialTheme.colorScheme.secondaryContainer)
+                .border(1.dp, Accent, MaterialTheme.shapes.medium)
+                .padding(start = 18.dp, end = 8.dp, top = 10.dp, bottom = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(Modifier.weight(1f)) {
+                Text(action.title, style = MaterialTheme.typography.bodyLarge)
+                Text(captureHint(action).replaceFirstChar { it.uppercase() }, style = MaterialTheme.typography.titleMedium, color = Accent)
             }
+            AppButton("Отмена", onCancel, style = ButtonStyle.Ghost)
         }
         return
     }
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text(action.title, style = MaterialTheme.typography.bodyLarge)
-            val keys = bindings.keysOf(action)
-            val axes = bindings.axesOf(action)
+    SettingRow(action.title, hint = null) {
+        val keys = bindings.keysOf(action)
+        val axes = bindings.axesOf(action)
+        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
             if (keys.isEmpty() && axes.isEmpty()) {
-                Text("не назначено", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            } else {
-                Row(Modifier.horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                    keys.forEach { key ->
-                        InputChip(
-                            selected = false,
-                            onClick = { bindings.removeKey(action, key) },
-                            label = { Text(KeyBindings.keyName(key)) },
-                            trailingIcon = { Text("✕") },
-                        )
-                    }
-                    // У оси два действия: развернуть направление и убрать.
-                    axes.forEach { axis ->
-                        InputChip(
-                            selected = axis.inverted,
-                            onClick = { bindings.invertAxis(action, axis) },
-                            label = { Text(axis.title) },
-                            leadingIcon = { Text("⇅") },
-                        )
-                        TextButton(onClick = { bindings.removeAxis(action, axis) }) { Text("✕") }
-                    }
-                }
+                Hint("не назначено")
             }
+            keys.forEach { key ->
+                AppButton(KeyBindings.keyName(key), { bindings.removeKey(action, key) }, icon = Icons.Rounded.Close, height = 40.dp)
+            }
+            // У оси два действия: развернуть направление и убрать.
+            axes.forEach { axis ->
+                AppButton(axis.title, { bindings.invertAxis(action, axis) }, icon = Icons.Rounded.SwapVert, selected = axis.inverted, height = 40.dp)
+                AppIconButton(Icons.Rounded.Close, "Убрать ось", { bindings.removeAxis(action, axis) }, size = 40.dp)
+            }
+            AppButton(if (action.isAxis) "Ось" else "Назначить", onAdd, icon = Icons.Rounded.Add, style = ButtonStyle.Ghost, height = 40.dp)
         }
-        TextButton(onClick = onAdd) { Text(if (action.isAxis) "+ Ось" else "+ Назначить") }
     }
 }
 

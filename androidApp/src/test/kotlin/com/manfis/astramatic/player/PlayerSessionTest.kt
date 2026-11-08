@@ -590,7 +590,7 @@ class PlayerSessionTest {
         assertTrue(media.seeks.size <= 7, "декодеру досталось ${media.seeks.size} шагов из 20")
         assertTrue(media.seeks.size >= 3, "картинка должна двигаться: ${media.seeks.size}")
         assertEquals(20, scene.huds.count { it.kind == HudBar.Kind.Seek })
-        assertEquals("▶▶ 20 с  ·  2:00 / 10:00", scene.huds.last().label)
+        assertEquals("+20 с  ·  2:00 / 10:00", scene.huds.last().label)
     }
 
     @Test

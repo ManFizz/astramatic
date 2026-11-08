@@ -1,5 +1,6 @@
 package com.manfis.astramatic.settings
 
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -26,14 +27,18 @@ class SettingsActivity : ComponentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         setContent {
-            MaterialTheme {
+            com.manfis.astramatic.ui.AppTheme(vr = false) {
                 Surface(Modifier.fillMaxSize()) {
                     Column(Modifier.fillMaxSize().safeContentPadding()) {
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
                             verticalAlignment = Alignment.CenterVertically,
                         ) {
-                            TextButton(onClick = ::finish) { Text("← Назад") }
+                            com.manfis.astramatic.ui.AppIconButton(
+                                androidx.compose.material.icons.Icons.AutoMirrored.Rounded.ArrowBack,
+                                "Назад",
+                                ::finish,
+                            )
                             Text("Настройки", style = MaterialTheme.typography.titleLarge)
                         }
                         HorizontalDivider()

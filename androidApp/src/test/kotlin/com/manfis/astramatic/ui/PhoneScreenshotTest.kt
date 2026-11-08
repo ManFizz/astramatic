@@ -25,7 +25,7 @@ class PhoneScreenshotTest {
     @Test
     fun home() {
         compose.setContent {
-            MaterialTheme {
+            AppTheme(vr = false) {
                 Surface {
                     CompositionLocalProvider(LocalVersionText provides "v1.0 · тест") { LibraryApp(onPlay = {}) }
                 }

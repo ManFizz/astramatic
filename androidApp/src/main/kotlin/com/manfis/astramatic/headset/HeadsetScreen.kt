@@ -39,7 +39,7 @@ import java.util.Locale
  * «Отменить» или уход с экрана без «Сохранить» возвращают как было.
  */
 @Composable
-fun HeadsetScreen(onBack: () -> Unit, onSaved: () -> Unit = {}, closeOnSave: Boolean = false, live: Boolean = false) {
+fun HeadsetScreen(onBack: () -> Unit, onSaved: () -> Unit = {}, closeOnSave: Boolean = false, live: Boolean = false, header: Boolean = true) {
     val context = LocalContext.current
     var original by remember { mutableStateOf(HeadsetParams.load(context)) }
     var params by remember { mutableStateOf(original) }
@@ -66,14 +66,16 @@ fun HeadsetScreen(onBack: () -> Unit, onSaved: () -> Unit = {}, closeOnSave: Boo
     }
 
     Column(Modifier.fillMaxSize().safeContentPadding()) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            TextButton(onClick = onBack) { Text("← Назад") }
-            Text("Настройка шлема", style = MaterialTheme.typography.titleLarge)
+        // В меню шлема заголовок уже есть — вкладка «Шлем».
+        if (header) {
+            Row(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                TextButton(onClick = onBack) { Text("Назад") }
+                Text("Настройка шлема", style = MaterialTheme.typography.titleLarge)
+            }
         }
-        HorizontalDivider()
         HeadsetForm(
             params = params,
             live = live,
@@ -112,17 +114,16 @@ private fun HeadsetForm(
         modifier = Modifier
             .fillMaxSize()
             .verticalScroll(rememberScrollState())
-            .padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
+            .padding(horizontal = 28.dp, vertical = 20.dp),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text(
+        com.manfis.astramatic.ui.Hint(
             if (live) {
                 "Изменения видны сразу на сетке вокруг. Линии стен должны быть прямыми до самых краёв, " +
                     "крест в центре — не двоиться. «Сохранить» — оставить, «Отменить» — вернуть как было."
             } else {
                 "Для шлемов без QR-кода. Меняйте по одному параметру и проверяйте в плеере."
             },
-            style = MaterialTheme.typography.bodySmall,
         )
 
         ParamSlider(
@@ -155,27 +156,21 @@ private fun HeadsetForm(
             value = params.k2, range = 0f..1f, decimals = 3,
         ) { onChange(params.copy(k2 = it)) }
 
-        Text("Положение телефона", style = MaterialTheme.typography.titleMedium)
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            HeadsetParams.Alignment.entries.forEach { alignment ->
-                FilterChip(
-                    selected = params.alignment == alignment,
-                    onClick = { onChange(params.copy(alignment = alignment)) },
-                    label = {
-                        Text(
-                            when (alignment) {
-                                HeadsetParams.Alignment.Bottom -> "Упор снизу"
-                                HeadsetParams.Alignment.Center -> "По центру"
-                                HeadsetParams.Alignment.Top -> "Упор сверху"
-                            }
-                        )
-                    },
-                )
-            }
-        }
-        Text(
+        com.manfis.astramatic.ui.SectionTitle("Положение телефона")
+        com.manfis.astramatic.ui.Segmented(
+            HeadsetParams.Alignment.entries,
+            params.alignment,
+            {
+                when (it) {
+                    HeadsetParams.Alignment.Bottom -> "Упор снизу"
+                    HeadsetParams.Alignment.Center -> "По центру"
+                    HeadsetParams.Alignment.Top -> "Упор сверху"
+                }
+            },
+            { onChange(params.copy(alignment = it)) },
+        )
+        com.manfis.astramatic.ui.Hint(
             "Большинство боксов зажимают телефон по центру. Если центры картинок выше или ниже зрачков — выберите упор.",
-            style = MaterialTheme.typography.bodySmall,
         )
 
         if (params.alignment != HeadsetParams.Alignment.Center) {
@@ -189,9 +184,9 @@ private fun HeadsetForm(
         status?.let { Text(it, style = MaterialTheme.typography.bodyMedium) }
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = onSave) { Text("Сохранить") }
-            if (live) OutlinedButton(onClick = onCancel) { Text("Отменить") }
-            OutlinedButton(onClick = { onChange(HeadsetParams.CardboardV1) }) { Text("Как Cardboard v1") }
+            com.manfis.astramatic.ui.AppButton("Сохранить", onSave, style = com.manfis.astramatic.ui.ButtonStyle.Filled)
+            if (live) com.manfis.astramatic.ui.AppButton("Отменить", onCancel)
+            com.manfis.astramatic.ui.AppButton("Как Cardboard v1", { onChange(HeadsetParams.CardboardV1) })
         }
     }
 }
@@ -205,14 +200,19 @@ private fun ParamSlider(
     decimals: Int,
     onChange: (Float) -> Unit,
 ) {
-    Column {
-        Text(
-            "$title: ${String.format(Locale.US, "%.${decimals}f", value)}",
-            style = MaterialTheme.typography.titleMedium,
-        )
-        Slider(value = value.coerceIn(range), onValueChange = onChange, valueRange = range)
-        Text(hint, style = MaterialTheme.typography.bodySmall)
+    val step = when (decimals) {
+        0 -> 1f
+        1 -> 0.1f
+        else -> 0.001f
     }
+    com.manfis.astramatic.ui.LabeledSlider(
+        title = "$title: ${String.format(Locale.US, "%.${decimals}f", value)}",
+        hint = hint,
+        value = value,
+        range = range,
+        step = step,
+        onChange = onChange,
+    )
 }
 
 private const val LIVE_APPLY_DELAY_MS = 150L

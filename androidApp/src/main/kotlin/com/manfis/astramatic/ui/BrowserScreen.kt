@@ -1,5 +1,14 @@
 package com.manfis.astramatic.ui
 
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.automirrored.rounded.ArrowForward
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.DeleteSweep
+import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Star
+import androidx.compose.material.icons.rounded.StarBorder
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.ContextWrapper
@@ -143,14 +152,14 @@ internal fun BrowserScreen(state: BrowserState, embedded: Boolean, onClose: () -
     Box(Modifier.fillMaxSize()) {
         Column(Modifier.fillMaxSize()) {
             Row(
-                Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(2.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
-                TextButton(onClick = onClose) { Text("✕") }
-                TextButton(onClick = { web.view?.goBack() }, enabled = canGoBack) { Text("◀") }
-                TextButton(onClick = { web.view?.goForward() }, enabled = canGoForward) { Text("▶") }
-                TextButton(onClick = { web.view?.reload() }, enabled = state.url != null) { Text("⟳") }
+                AppIconButton(Icons.Rounded.Close, "Закрыть браузер", onClose, style = ButtonStyle.Tonal)
+                AppIconButton(Icons.AutoMirrored.Rounded.ArrowBack, "Назад", { web.view?.goBack() }, enabled = canGoBack)
+                AppIconButton(Icons.AutoMirrored.Rounded.ArrowForward, "Вперёд", { web.view?.goForward() }, enabled = canGoForward)
+                AppIconButton(Icons.Rounded.Refresh, "Обновить", { web.view?.reload() }, enabled = state.url != null)
                 AppTextField(
                     address,
                     { address = it },
@@ -161,18 +170,26 @@ internal fun BrowserScreen(state: BrowserState, embedded: Boolean, onClose: () -
                 val url = state.url
                 if (url != null) {
                     val marked = store.isBookmarked(url)
-                    TextButton(onClick = { store.toggleBookmark(WebPage(state.title.ifBlank { url }, url)) }) {
-                        Text(if (marked) "★" else "☆")
-                    }
+                    AppIconButton(
+                        if (marked) Icons.Rounded.Star else Icons.Rounded.StarBorder,
+                        if (marked) "Убрать из закладок" else "В закладки",
+                        { store.toggleBookmark(WebPage(state.title.ifBlank { url }, url)) },
+                    )
                 }
-                TextButton(onClick = {
+                AppIconButton(Icons.Rounded.Home, "Стартовая страница", {
                     state.url = null
                     state.saved = null
                     address = ""
-                }) { Text("⌂") }
+                })
             }
             if (progress < 1f && state.url != null) {
-                LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth().height(2.dp))
+                LinearProgressIndicator(
+                progress = { progress },
+                modifier = Modifier.fillMaxWidth().height(2.dp),
+                color = Accent,
+                trackColor = Color.Transparent,
+                drawStopIndicator = {},
+            )
             }
             val url = state.url
             if (url == null) {
@@ -375,11 +392,11 @@ private fun StartPage(store: BrowserStore, onOpen: (String) -> Unit) {
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         item(span = { GridItemSpan(maxLineSpan) }) {
-            Text("Закладки", style = MaterialTheme.typography.titleMedium)
+            SectionTitle("Закладки")
         }
         if (store.bookmarks.isEmpty()) {
             item(span = { GridItemSpan(maxLineSpan) }) {
-                Text("Здесь будут закладки: ☆ рядом с адресом добавляет страницу.", style = MaterialTheme.typography.bodyMedium)
+                Hint("Здесь будут закладки: звёздочка рядом с адресом добавляет страницу.")
             }
         }
         items(store.bookmarks, key = { "b" + it.url }) { page ->
@@ -388,8 +405,8 @@ private fun StartPage(store: BrowserStore, onOpen: (String) -> Unit) {
         if (store.history.isNotEmpty()) {
             item(span = { GridItemSpan(maxLineSpan) }) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text("Недавние сайты", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-                    TextButton(onClick = store::clearHistory) { Text("Очистить") }
+                    SectionTitle("Недавние сайты", Modifier.weight(1f))
+                    AppButton("Очистить", store::clearHistory, icon = Icons.Rounded.DeleteSweep, style = ButtonStyle.Ghost)
                 }
             }
             items(store.history.take(12), key = { "h" + it.url }) { page ->
@@ -402,32 +419,34 @@ private fun StartPage(store: BrowserStore, onOpen: (String) -> Unit) {
 @Composable
 private fun SiteTile(page: WebPage, onOpen: () -> Unit, onRemove: (() -> Unit)?) {
     val shape = RoundedCornerShape(16.dp)
+    val interaction = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }
+    val hovered by hoverState(interaction)
     Row(
         Modifier
             .fillMaxWidth()
-            .height(64.dp)
+            .height(68.dp)
             .clip(shape)
-            .background(MaterialTheme.colorScheme.surfaceContainerHigh)
-            .clickable(onClick = onOpen)
-            .padding(start = 12.dp),
+            .background(if (hovered) CardHover else CardColor)
+            .clickable(interactionSource = interaction, indication = null, onClick = onOpen)
+            .padding(start = 12.dp, end = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box(
-            Modifier.size(36.dp).clip(RoundedCornerShape(10.dp)).background(MaterialTheme.colorScheme.primaryContainer),
+            Modifier.size(40.dp).clip(RoundedCornerShape(12.dp)).background(Color(0x24FFFFFF)),
             contentAlignment = Alignment.Center,
         ) {
             Text(page.title.ifBlank { page.host }.take(1).uppercase(), style = MaterialTheme.typography.titleMedium)
         }
         Column(Modifier.weight(1f).padding(horizontal = 10.dp)) {
-            Text(page.title, style = MaterialTheme.typography.bodyMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(page.title, style = MaterialTheme.typography.bodyLarge, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(
                 page.host,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        if (onRemove != null) TextButton(onClick = onRemove) { Text("✕") }
+        if (onRemove != null) AppIconButton(Icons.Rounded.Close, "Убрать закладку", onRemove, size = 40.dp)
     }
 }

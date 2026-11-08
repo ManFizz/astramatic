@@ -1,5 +1,14 @@
 package com.manfis.astramatic.ui
 
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.layout.size
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Image
+import androidx.compose.material.icons.rounded.Movie
+import androidx.compose.material3.Icon
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
+import androidx.compose.ui.graphics.Color
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -41,13 +50,13 @@ internal fun QueueSheet(state: VrMenuState, actions: VrMenuActions) {
     LaunchedEffect(state.queueIndex, queue.size) {
         if (queue.isNotEmpty()) listState.animateScrollToItem((state.queueIndex - 1).coerceAtLeast(0))
     }
-    Column(Modifier.fillMaxSize().padding(top = 12.dp)) {
+    Column(Modifier.fillMaxSize().padding(top = 16.dp)) {
         Row(Modifier.padding(horizontal = 20.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("Очередь", style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.width(12.dp))
             Text(
                 if (queue.isEmpty()) "" else "${state.queueIndex + 1} из ${queue.size}",
-                style = MaterialTheme.typography.bodyMedium,
+                style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
@@ -67,20 +76,29 @@ internal fun QueueSheet(state: VrMenuState, actions: VrMenuActions) {
 @Composable
 private fun QueueCard(item: PlaylistItem, current: Boolean, onClick: () -> Unit) {
     val accent = MaterialTheme.colorScheme.primary
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by hoverState(interaction)
+    val shape = RoundedCornerShape(14.dp)
     Column(
         Modifier
-            .width(176.dp)
-            .clip(RoundedCornerShape(12.dp))
-            .clickable(onClick = onClick)
+            .width(184.dp)
+            .clip(RoundedCornerShape(16.dp))
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
             .padding(4.dp),
     ) {
         Box(
             Modifier
                 .fillMaxWidth()
-                .height(99.dp)
-                .clip(RoundedCornerShape(10.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant)
-                .then(if (current) Modifier.border(3.dp, accent, RoundedCornerShape(10.dp)) else Modifier),
+                .height(104.dp)
+                .clip(shape)
+                .background(if (hovered) CardHover else CardColor)
+                .then(
+                    when {
+                        current -> Modifier.border(2.dp, accent, shape)
+                        hovered -> Modifier.border(1.dp, Color(0x55FFFFFF), shape)
+                        else -> Modifier
+                    },
+                ),
         ) {
             if (item.thumbnail != null) {
                 AsyncImage(
@@ -90,30 +108,31 @@ private fun QueueCard(item: PlaylistItem, current: Boolean, onClick: () -> Unit)
                     modifier = Modifier.fillMaxSize(),
                 )
             } else {
-                Text(
-                    if (item.isImage) "🖼" else "🎬",
-                    Modifier.align(Alignment.Center),
-                    style = MaterialTheme.typography.headlineSmall,
+                Icon(
+                    if (item.isImage) Icons.Rounded.Image else Icons.Rounded.Movie,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.align(Alignment.Center).size(36.dp),
                 )
             }
             if (current) {
                 Surface(
                     color = accent,
                     contentColor = MaterialTheme.colorScheme.onPrimary,
-                    shape = RoundedCornerShape(bottomEnd = 10.dp),
-                    modifier = Modifier.align(Alignment.TopStart),
+                    shape = RoundedCornerShape(50),
+                    modifier = Modifier.align(Alignment.TopStart).padding(8.dp),
                 ) {
-                    Text("▶ сейчас", style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp))
+                    Text("Сейчас", style = MaterialTheme.typography.labelMedium, modifier = Modifier.padding(horizontal = 10.dp, vertical = 2.dp))
                 }
             }
         }
         Text(
             item.title,
-            style = MaterialTheme.typography.bodySmall,
+            style = MaterialTheme.typography.labelMedium,
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
-            color = if (current) accent else MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.padding(top = 4.dp, start = 2.dp, end = 2.dp),
+            color = if (current) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(top = 6.dp, start = 4.dp, end = 4.dp),
         )
     }
 }

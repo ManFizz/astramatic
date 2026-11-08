@@ -131,9 +131,9 @@ private fun <T> PairScreen(
         AppTextField(name, { name = it }, label = "Название (необязательно)", modifier = Modifier.fillMaxWidth())
 
         if (initial == null) {
-            Text(instructions, style = MaterialTheme.typography.bodyMedium)
+            Text(instructions, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             // В шлеме камера закрыта: только ссылка.
-            if (LocalVrKeyboard.current == null) Button(enabled = !busy, onClick = {
+            if (LocalVrKeyboard.current == null) androidx.compose.material3.Button(enabled = !busy, onClick = {
                 val options = GmsBarcodeScannerOptions.Builder().setBarcodeFormats(Barcode.FORMAT_QR_CODE).build()
                 GmsBarcodeScanning.getClient(context, options).startScan()
                     .addOnSuccessListener { barcode -> barcode.rawValue?.let(::connect) }
@@ -147,7 +147,7 @@ private fun <T> PairScreen(
                 modifier = Modifier.fillMaxWidth(),
                 onDone = { if (!busy && link.isNotBlank()) connect(link) },
             )
-            OutlinedButton(enabled = !busy && link.isNotBlank(), onClick = { connect(link) }) { Text("Подключить по ссылке") }
+            AppButton("Подключить по ссылке", { connect(link) }, style = ButtonStyle.Filled, enabled = !busy && link.isNotBlank())
         } else if (address != null) {
             Text(address, style = MaterialTheme.typography.bodySmall)
         }
@@ -157,11 +157,11 @@ private fun <T> PairScreen(
 
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
             if (initial != null) {
-                Button(onClick = { onSave(rename(initial, name)) }) { Text("Сохранить") }
-                TextButton(onClick = { onDelete(initial) }) { Text("Удалить") }
+                AppButton("Сохранить", { onSave(rename(initial, name)) }, style = ButtonStyle.Filled)
+                AppButton("Удалить", { onDelete(initial) }, style = ButtonStyle.Ghost)
             }
-            TextButton(onClick = onCancel) { Text("Отмена") }
+            AppButton("Отмена", onCancel, style = ButtonStyle.Ghost)
         }
-        if (initial != null) Text(deleteNote, style = MaterialTheme.typography.bodySmall)
+        if (initial != null) Hint(deleteNote)
     }
 }

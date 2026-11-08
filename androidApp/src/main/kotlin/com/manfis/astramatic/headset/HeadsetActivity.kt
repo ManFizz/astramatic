@@ -15,7 +15,7 @@ class HeadsetActivity : ComponentActivity() {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
         setContent {
-            MaterialTheme {
+            com.manfis.astramatic.ui.AppTheme(vr = false) {
                 Surface(Modifier.fillMaxSize()) {
                     HeadsetScreen(onBack = ::finish)
                 }

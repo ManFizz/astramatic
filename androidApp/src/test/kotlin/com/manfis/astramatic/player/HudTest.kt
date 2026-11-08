@@ -40,8 +40,8 @@ class HudTest {
 
     @Test
     fun `seek bar shows the direction, the distance and the time`() {
-        assertEquals("▶▶ 30 с  ·  12:34 / 1:02:00", HudBar.seek(754_000, 3_720_000, 30_000).label)
-        assertEquals("◀◀ 1:30  ·  0:05 / 10:00", HudBar.seek(5_000, 600_000, -90_000).label)
+        assertEquals("+30 с  ·  12:34 / 1:02:00", HudBar.seek(754_000, 3_720_000, 30_000).label)
+        assertEquals("−1:30  ·  0:05 / 10:00", HudBar.seek(5_000, 600_000, -90_000).label)
         assertEquals(0.5f, HudBar.seek(300_000, 600_000, 1).value, 0.0001f)
         assertNull(HudBar.seek(0, 600_000, 1).mark)
     }
@@ -50,7 +50,7 @@ class HudTest {
     fun `seek bar without known duration does not fall over`() {
         val bar = HudBar.seek(65_000, 0, 5_000)
 
-        assertEquals("▶▶ 5 с  ·  1:05", bar.label)
+        assertEquals("+5 с  ·  1:05", bar.label)
         assertEquals(0f, bar.value)
     }
 

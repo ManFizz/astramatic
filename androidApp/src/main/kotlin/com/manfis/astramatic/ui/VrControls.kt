@@ -5,7 +5,6 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -13,16 +12,28 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
-import androidx.compose.material3.FilledTonalButton
-import androidx.compose.material3.FilterChip
-import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.CenterFocusStrong
+import androidx.compose.material.icons.rounded.Forward10
+import androidx.compose.material.icons.rounded.Forward30
+import androidx.compose.material.icons.rounded.Home
+import androidx.compose.material.icons.rounded.Pause
+import androidx.compose.material.icons.rounded.PlayArrow
+import androidx.compose.material.icons.rounded.Repeat
+import androidx.compose.material.icons.rounded.RepeatOne
+import androidx.compose.material.icons.rounded.Replay10
+import androidx.compose.material.icons.rounded.Replay30
+import androidx.compose.material.icons.rounded.Shuffle
+import androidx.compose.material.icons.rounded.SkipNext
+import androidx.compose.material.icons.rounded.SkipPrevious
+import androidx.compose.material.icons.rounded.Slideshow
+import androidx.compose.material.icons.rounded.Tune
+import androidx.compose.material.icons.rounded.ViewCarousel
+import androidx.compose.material.icons.rounded.ZoomIn
+import androidx.compose.material.icons.rounded.ZoomOut
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -50,7 +61,7 @@ internal fun ControlsLayer(state: VrMenuState, actions: VrMenuActions) {
             Column {
                 if (sheet != null) {
                     Box(Modifier.fillMaxWidth().height(SheetHeightDp)) { SheetContent(sheet, state, actions) }
-                    HorizontalDivider(Modifier.padding(horizontal = 16.dp))
+                    Divider(Modifier.padding(horizontal = 20.dp))
                 }
                 ControlsBar(state, actions)
             }
@@ -66,11 +77,11 @@ internal fun ControlsLayer(state: VrMenuState, actions: VrMenuActions) {
                         actions.hide()
                     },
             )
-            Panel(Modifier.fillMaxWidth(), RoundedCornerShape(topStart = 20.dp, topEnd = 20.dp)) {
+            Panel(Modifier.fillMaxWidth(), RoundedCornerShape(topStart = 24.dp, topEnd = 24.dp)) {
                 Column(Modifier.navigationBarsPadding()) {
                     if (sheet != null) {
                         Box(Modifier.fillMaxWidth().height(SheetHeightDp)) { SheetContent(sheet, state, actions) }
-                        HorizontalDivider(Modifier.padding(horizontal = 16.dp))
+                        Divider(Modifier.padding(horizontal = 20.dp))
                     }
                     ControlsBar(state, actions)
                 }
@@ -79,6 +90,10 @@ internal fun ControlsLayer(state: VrMenuState, actions: VrMenuActions) {
     }
 }
 
+/**
+ * Полоска плеера. Сверху название и время, под ними перемотка. Ниже по центру — управление
+ * воспроизведением крупно, а ряд под ним: вид слева, режимы по центру, панели и хаб справа.
+ */
 @Composable
 private fun ControlsBar(state: VrMenuState, actions: VrMenuActions) {
     val context = LocalContext.current
@@ -98,10 +113,7 @@ private fun ControlsBar(state: VrMenuState, actions: VrMenuActions) {
         }
     }
 
-    val big = PaddingValues(horizontal = 14.dp, vertical = 8.dp)
-    val small = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
-    val bigText = MaterialTheme.typography.titleLarge
-    Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)) {
+    Column(Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 14.dp, bottom = 10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text(
                 state.title ?: "",
@@ -110,16 +122,17 @@ private fun ControlsBar(state: VrMenuState, actions: VrMenuActions) {
                 overflow = TextOverflow.Ellipsis,
                 modifier = Modifier.weight(1f),
             )
-            Spacer(Modifier.width(12.dp))
             if (!state.isImage) {
+                Gap()
                 Text(
                     "${formatTime(dragging?.toLong() ?: position)} / ${formatTime(duration)}",
-                    style = MaterialTheme.typography.titleMedium,
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
             }
         }
         if (!state.isImage) {
-            Slider(
+            AppSlider(
                 value = dragging ?: position.toFloat(),
                 onValueChange = { dragging = it },
                 onValueChangeFinished = {
@@ -129,84 +142,82 @@ private fun ControlsBar(state: VrMenuState, actions: VrMenuActions) {
                 valueRange = 0f..duration.coerceAtLeast(1).toFloat(),
             )
         } else {
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(12.dp))
         }
-        // Главный ряд — крупно и точно по центру: файлы, перемотка, пауза.
         Row(
             Modifier.fillMaxWidth(),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+            horizontalArrangement = Arrangement.spacedBy(10.dp, Alignment.CenterHorizontally),
         ) {
-            TextButton(onClick = actions::previousFile, enabled = state.hasPrevious, contentPadding = big) {
-                Text("⏮", style = bigText)
-            }
+            AppIconButton(Icons.Rounded.SkipPrevious, "Предыдущий файл", actions::previousFile, size = 52.dp, enabled = state.hasPrevious)
             if (!state.isImage) {
-                TextButton(onClick = { actions.seekBy(-30_000) }, contentPadding = big) { Text("−30", style = bigText) }
-                TextButton(onClick = { actions.seekBy(-10_000) }, contentPadding = big) { Text("−10", style = bigText) }
+                AppIconButton(Icons.Rounded.Replay30, "Назад на 30 секунд", { actions.seekBy(-30_000) }, size = 52.dp)
+                AppIconButton(Icons.Rounded.Replay10, "Назад на 10 секунд", { actions.seekBy(-10_000) }, size = 52.dp)
             }
-            // У фото ⏯ — пауза слайд-шоу.
-            Button(onClick = actions::togglePlayback, contentPadding = PaddingValues(horizontal = 28.dp, vertical = 10.dp)) {
-                Text(if (playing) "⏸" else "▶", style = bigText)
-            }
+            // У фото — пауза слайд-шоу.
+            AppIconButton(
+                if (playing) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
+                if (playing) "Пауза" else "Воспроизвести",
+                actions::togglePlayback,
+                size = 64.dp,
+                style = ButtonStyle.Filled,
+            )
             if (!state.isImage) {
-                TextButton(onClick = { actions.seekBy(10_000) }, contentPadding = big) { Text("+10", style = bigText) }
-                TextButton(onClick = { actions.seekBy(30_000) }, contentPadding = big) { Text("+30", style = bigText) }
+                AppIconButton(Icons.Rounded.Forward10, "Вперёд на 10 секунд", { actions.seekBy(10_000) }, size = 52.dp)
+                AppIconButton(Icons.Rounded.Forward30, "Вперёд на 30 секунд", { actions.seekBy(30_000) }, size = 52.dp)
             }
-            TextButton(onClick = actions::nextFile, enabled = state.hasNext, contentPadding = big) {
-                Text("⏭", style = bigText)
-            }
+            AppIconButton(Icons.Rounded.SkipNext, "Следующий файл", actions::nextFile, size = 52.dp, enabled = state.hasNext)
         }
-        // Служебный ряд: вид слева, режимы по центру, переходы справа.
+        Spacer(Modifier.height(6.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                TextButton(onClick = actions::recenterAfterCountdown, contentPadding = small) { Text("Центр") }
-                TextButton(onClick = { actions.setZoom(state.zoom / ZOOM_STEP) }, contentPadding = small) { Text("−") }
-                TextButton(onClick = { actions.setZoom(state.zoom * ZOOM_STEP) }, contentPadding = small) { Text("+") }
+            Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
+                AppButton("Центр", actions::recenterAfterCountdown, icon = Icons.Rounded.CenterFocusStrong, style = ButtonStyle.Ghost)
+                AppIconButton(Icons.Rounded.ZoomOut, "Отдалить", { actions.setZoom(state.zoom / ZOOM_STEP) })
+                AppIconButton(Icons.Rounded.ZoomIn, "Приблизить", { actions.setZoom(state.zoom * ZOOM_STEP) })
                 // Из шлема 2D не включается: только пальцем, кнопкой на экране (как крестик).
-                if (!state.stereo) TextButton(onClick = actions::toggleStereo, contentPadding = small) { Text("VR") }
+                if (!state.stereo) AppButton("VR", actions::toggleStereo, style = ButtonStyle.Ghost)
             }
-            // Режимы — короткими значками: выбранный подсвечен, подпись только у включённого.
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            // Режимы — значками: включённый подсвечен.
+            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
                 val repeat = RepeatMode.entries.find { it.name == settings.repeatMode } ?: RepeatMode.Off
-                FilterChip(
-                    selected = repeat != RepeatMode.Off,
-                    onClick = actions::cycleRepeat,
-                    label = {
-                        Text(
-                            when (repeat) {
-                                RepeatMode.Off -> "🔁"
-                                RepeatMode.All -> "🔁 Папка"
-                                RepeatMode.One -> "🔂 Файл"
-                            },
-                        )
+                AppIconButton(
+                    if (repeat == RepeatMode.One) Icons.Rounded.RepeatOne else Icons.Rounded.Repeat,
+                    when (repeat) {
+                        RepeatMode.Off -> "Повтор выключен"
+                        RepeatMode.All -> "Повтор папки"
+                        RepeatMode.One -> "Повтор файла"
                     },
+                    actions::cycleRepeat,
+                    selected = repeat != RepeatMode.Off,
                 )
-                FilterChip(selected = settings.shuffle, onClick = actions::toggleShuffle, label = { Text("🔀") })
+                AppIconButton(Icons.Rounded.Shuffle, "Случайный порядок", actions::toggleShuffle, selected = settings.shuffle)
                 if (state.isImage) {
-                    FilterChip(
+                    AppButton(
+                        "${settings.slideshowSeconds} с",
+                        actions::toggleSlideshow,
+                        icon = Icons.Rounded.Slideshow,
+                        style = ButtonStyle.Ghost,
                         selected = settings.slideshow,
-                        onClick = actions::toggleSlideshow,
-                        label = { Text("⏱ ${settings.slideshowSeconds} с") },
                     )
                 }
             }
-            Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(6.dp, Alignment.End)) {
-                SheetChip(state, VrMenuState.Sheet.Queue, "▤ Очередь")
-                SheetChip(state, VrMenuState.Sheet.View, "◐ Вид")
-                FilledTonalButton(onClick = actions::toHub, contentPadding = small) {
-                    Text("🏠")
-                }
+            Row(Modifier.weight(1f), horizontalArrangement = Arrangement.spacedBy(4.dp, Alignment.End)) {
+                SheetButton(state, VrMenuState.Sheet.Queue, "Очередь", Icons.Rounded.ViewCarousel)
+                SheetButton(state, VrMenuState.Sheet.View, "Вид", Icons.Rounded.Tune)
+                AppIconButton(Icons.Rounded.Home, "Хаб", actions::toHub, style = ButtonStyle.Tonal)
             }
         }
     }
 }
 
 @Composable
-private fun SheetChip(state: VrMenuState, sheet: VrMenuState.Sheet, label: String) {
-    FilterChip(
+private fun SheetButton(state: VrMenuState, sheet: VrMenuState.Sheet, label: String, icon: androidx.compose.ui.graphics.vector.ImageVector) {
+    AppButton(
+        label,
+        { state.sheet = if (state.sheet == sheet) null else sheet },
+        icon = icon,
+        style = ButtonStyle.Ghost,
         selected = state.sheet == sheet,
-        onClick = { state.sheet = if (state.sheet == sheet) null else sheet },
-        label = { Text(label) },
     )
 }
 

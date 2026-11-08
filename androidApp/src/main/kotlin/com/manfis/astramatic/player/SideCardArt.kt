@@ -25,9 +25,9 @@ object SideCardArt {
     private const val BAND = 84f
 
     private fun label(card: SideCard) = when (card.kind) {
-        SideKind.Previous -> "◀ Предыдущее"
-        SideKind.Next -> "Следующее ▶"
-        SideKind.Hub -> "🏠 Хаб"
+        SideKind.Previous -> "Предыдущее"
+        SideKind.Next -> "Следующее"
+        SideKind.Hub -> "Хаб"
     }
 
     suspend fun loadThumbnail(context: Context, card: SideCard): Bitmap? {
@@ -43,16 +43,21 @@ object SideCardArt {
             addRoundRect(RectF(0f, 0f, WIDTH.toFloat(), HEIGHT.toFloat()), RADIUS, RADIUS, Path.Direction.CW)
         }
         canvas.clipPath(outline)
-        canvas.drawColor(Color.rgb(38, 38, 46))
+        canvas.drawColor(Color.rgb(30, 31, 36))
         thumbnail?.let { canvas.drawBitmap(it, centerCrop(it), Rect(0, 0, WIDTH, HEIGHT), Paint(Paint.FILTER_BITMAP_FLAG)) }
         val shade = Paint().apply { color = Color.argb(150, 0, 0, 0) }
         canvas.drawRect(0f, 0f, WIDTH.toFloat(), BAND, shade)
         canvas.drawRect(0f, HEIGHT - BAND, WIDTH.toFloat(), HEIGHT.toFloat(), shade)
         val text = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-            color = Color.WHITE
+            color = Color.rgb(237, 239, 243)
             textSize = 40f
         }
-        canvas.drawText(label(card), PADDING, 56f, text)
+        val caption = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.rgb(183, 187, 196)
+            textSize = 34f
+            isFakeBoldText = true
+        }
+        canvas.drawText(label(card), PADDING, 54f, caption)
         card.title?.let {
             val line = TextUtils.ellipsize(it, text, WIDTH - 2 * PADDING, TextUtils.TruncateAt.END)
             canvas.drawText(line, 0, line.length, PADDING, HEIGHT - 28f, text)

@@ -19,7 +19,7 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         setContent {
-            MaterialTheme {
+            com.manfis.astramatic.ui.AppTheme(vr = false) {
                 Surface(Modifier.fillMaxSize()) {
                     LibraryApp(onPlay = { playlist ->
                         PendingPlaylist.put(playlist)

@@ -1,5 +1,10 @@
 package com.manfis.astramatic.ui
 
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Computer
+import androidx.compose.material.icons.rounded.Folder
+import androidx.compose.material.icons.rounded.PhoneAndroid
+import androidx.compose.material.icons.rounded.PhotoLibrary
 import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -139,10 +144,10 @@ class VrPanelScreenshotTest {
         HubChrome(parked, videoOpen, onResume = {}, onToVideo = {}, onFormat = {}, onSettings = {})
 
     private val hubSources = listOf(
-        HubSource("📱", "Этот телефон", "Видео и фото") {},
-        HubSource("🖥", "Домашний компьютер", "Папка Windows") {},
-        HubSource("💻", "Рабочий стол", "AstraMatic на ПК") {},
-        HubSource("🖼", "Галерея", "Darkframe") {},
+        HubSource(Icons.Rounded.PhoneAndroid, "Этот телефон", "Видео и фото") {},
+        HubSource(Icons.Rounded.Folder, "Домашний компьютер", "Папка Windows") {},
+        HubSource(Icons.Rounded.Computer, "Рабочий стол", "AstraMatic на ПК") {},
+        HubSource(Icons.Rounded.PhotoLibrary, "Галерея", "Darkframe") {},
     )
 
     private fun watched(i: Int) = HistoryEntry(
@@ -160,8 +165,8 @@ class VrPanelScreenshotTest {
     private fun shootHub(name: String, chrome: HubChrome, recent: List<HistoryEntry>) {
         compose.setContent {
             PanelFrame(PanelLayout.Menu.visibleHeightPx) {
-                MaterialTheme(colorScheme = VrColors) {
-                    CompositionLocalProvider(LocalContentColor provides VrColors.onSurface) {
+                AppTheme(vr = true) {
+                    CompositionLocalProvider(LocalContentColor provides AppColors.onSurface) {
                         HubHome(chrome, hubSources, recent, onPlayRecent = {}, onOpenHistory = {})
                     }
                 }
@@ -308,7 +313,7 @@ class VrPanelScreenshotTest {
         val panel = compose.onNodeWithTag(PANEL).fetchSemanticsNode().boundsInRoot
         // Настоящие размеры: boundsInRoot обрезан родителем и за край выйти не может,
         // а колонка фиксированной высоты сжимает последний ряд вместо того, чтобы вывести его наружу.
-        val chip = compose.onNodeWithText("▤ Очередь").fetchSemanticsNode()
+        val chip = compose.onNodeWithText("Очередь").fetchSemanticsNode()
         val bottom = chip.positionInRoot.y + chip.size.height
         val visible = PanelLayout.Controls.visibleHeightPx
         assertEquals(visible.toFloat(), panel.height, "рамка теста должна совпадать с видимой частью дисплея")

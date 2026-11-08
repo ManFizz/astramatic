@@ -40,8 +40,8 @@ data class HudBar(
 
         /** [deltaMs] — на сколько ушли за эту перемотку. */
         fun seek(positionMs: Long, durationMs: Long, deltaMs: Long): HudBar {
-            val arrows = if (deltaMs < 0) "◀◀" else "▶▶"
-            val moved = "$arrows ${shortDelta(abs(deltaMs))}"
+            // Знак уже показывает направление: стрелки-символы были бы лишним шумом.
+            val moved = (if (deltaMs < 0) "−" else "+") + shortDelta(abs(deltaMs))
             val time = if (durationMs > 0) "${clock(positionMs)} / ${clock(durationMs)}" else clock(positionMs)
             return HudBar(
                 kind = Kind.Seek,
