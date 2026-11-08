@@ -220,6 +220,9 @@ class VrPanelScreenshotTest {
     }
 
     @Test
+    fun browserStart() = shoot(PanelLayout.Menu, "vr_browser_start", VrMenuState().apply { library.openBrowser() })
+
+    @Test
     fun hubFull() = shootHub("vr_hub_full", chrome(), List(8) { watched(it) })
 
     @Test

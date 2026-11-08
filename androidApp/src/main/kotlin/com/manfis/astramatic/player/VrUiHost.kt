@@ -98,6 +98,8 @@ class VrUiHost(
         presentation = Presentation(activity, display).apply {
             window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
             window?.setFormat(PixelFormat.TRANSLUCENT)
+            // Системная клавиатура в шлеме не видна и всплыла бы на экране телефона: печатает клавиатура шлема.
+            window?.addFlags(android.view.WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM)
             setContentView(composeView)
             show()
         }

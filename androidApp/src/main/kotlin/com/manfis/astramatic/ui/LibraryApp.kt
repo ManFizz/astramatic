@@ -91,6 +91,7 @@ internal sealed interface Screen {
     data class EditDarkframe(val server: DarkframeServer?) : Screen
     data class EditDesktop(val server: DesktopServer?) : Screen
     data object History : Screen
+    data object Browser : Screen
 }
 
 /** Где пользователь находится в библиотеке. Вынесено наружу, чтобы переживать переключение вкладок меню. */
@@ -99,6 +100,18 @@ class LibraryState {
 
     /** Открыт корень библиотеки, а не папка или редактор. */
     val atRoot get() = backStack.last() == Screen.Home
+
+    /** Браузер: открытая страница переживает уход в хаб. */
+    val browser = BrowserState()
+
+    /** Открыт браузер: ему нужно всё окно. */
+    val inBrowser get() = backStack.last() == Screen.Browser
+
+    /** Открыть браузер; с адресом — сразу на этой странице. */
+    fun openBrowser(url: String? = null) {
+        if (url != null) browser.open(url)
+        if (backStack.last() != Screen.Browser) backStack.add(Screen.Browser)
+    }
 }
 
 /**
@@ -156,6 +169,7 @@ fun LibraryApp(
                     onEditServer = { push(Screen.EditServer(it)) },
                     onEditDesktop = { push(Screen.EditDesktop(it)) },
                     onEditDarkframe = { push(Screen.EditDarkframe(it)) },
+                    onBrowser = { push(Screen.Browser) },
                 ),
                 recent = if (settings.keepHistory) history.entries else emptyList(),
                 onPlayRecent = { onPlay(Playlist.single(it.toPlaylistItem())) },
@@ -177,7 +191,10 @@ fun LibraryApp(
             onPickFile = { uri, name -> onPlay(Playlist.single(item(uri, name, VideoFiles.isImage(name), thumbnail = uri.toString()))) },
             onPlayHistory = { onPlay(Playlist.single(it.toPlaylistItem())) },
             onOpenHistory = { push(Screen.History) },
+            onOpenBrowser = { push(Screen.Browser) },
         )
+
+        Screen.Browser -> BrowserScreen(state.browser, embedded, onClose = ::pop)
 
         is Screen.Browse -> BrowseScreen(
             library = library,
@@ -247,6 +264,7 @@ private fun HomeScreen(
     onPickFile: (Uri, String) -> Unit,
     onPlayHistory: (HistoryEntry) -> Unit,
     onOpenHistory: () -> Unit,
+    onOpenBrowser: () -> Unit,
 ) {
     val context = LocalContext.current
     val settings = remember { AppSettings.get(context) }
@@ -289,6 +307,7 @@ private fun HomeScreen(
 
         Text("Источники", style = MaterialTheme.typography.titleMedium)
         SourceRow("📱", "Видео и фото на телефоне", null) { onOpen(MediaSourceRef.Phone, "Телефон") }
+        SourceRow("🌐", "Браузер", "Сайты и поиск") { onOpenBrowser() }
         servers.forEach { server ->
             SourceRow("🖥", server.title, "${server.host}\\${server.share}", onEdit = { onEditServer(server) }.takeIf { allowEditing }) {
                 onOpen(MediaSourceRef.Smb(server.id), server.title)

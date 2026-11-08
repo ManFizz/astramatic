@@ -48,7 +48,8 @@ internal fun MenuContent(state: VrMenuState, actions: VrMenuActions) {
             }
         }
         val home = state.tab == VrMenuState.Tab.Home
-        val hub = state.showingHub
+        // У хаба и браузера своя верхняя строка: общая только отняла бы место.
+        val hub = state.showingHub || (state.tab == VrMenuState.Tab.Home && state.library.inBrowser)
         // Из настроек при открытом видео «Главная» — это тоже выход в хаб.
         val goHome: () -> Unit = {
             if (state.title != null) {

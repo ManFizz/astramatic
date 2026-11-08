@@ -52,6 +52,11 @@ object DebugCommands {
                     )
                     "free" -> renderer.debugLook = null
                     "open" -> open(playlistOf(intent.getStringExtra("uris").orEmpty()))
+                    "browse" -> {
+                        menu.mode = VrMenuState.Mode.Menu
+                        menu.tab = VrMenuState.Tab.Home
+                        menu.library.openBrowser(intent.getStringExtra("url"))
+                    }
                 }
                 resultData = buildString {
                     append("place=").append(host.place)
@@ -61,6 +66,10 @@ object DebugCommands {
                     append(" title=").append(menu.title)
                     append(" parked=").append(menu.parkedTitle)
                     append(" savedSize=").append(settings.menuSize)
+                    append(" browser=").append(menu.library.browser.url)
+                    append(" webTitle=").append(menu.library.browser.title.replace(' ', '_'))
+                    append(" keyboard=").append(menu.keyboard.target?.label?.replace(' ', '_'))
+                    append(" typed=").append(menu.keyboard.text.replace(' ', '_'))
                     append(' ').append(renderer.debugState())
                 }
             }

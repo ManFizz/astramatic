@@ -81,11 +81,13 @@ internal fun rememberHubSources(
     onEditServer: (SmbServer) -> Unit,
     onEditDesktop: (DesktopServer) -> Unit,
     onEditDarkframe: (DarkframeServer) -> Unit,
+    onBrowser: () -> Unit,
 ): List<HubSource> {
     val context = LocalContext.current
     return remember(context) {
         buildList {
             add(HubSource("📱", "Этот телефон", "Видео и фото") { onOpen(MediaSourceRef.Phone, "Телефон") })
+            add(HubSource("🌐", "Браузер", "Сайты и поиск", onClick = onBrowser))
             library.servers.all().forEach {
                 add(HubSource("🖥", it.title, "Папка Windows", onEdit = { onEditServer(it) }) { onOpen(MediaSourceRef.Smb(it.id), it.title) })
             }

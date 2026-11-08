@@ -71,6 +71,8 @@ class PanelController(
             menu.keyboard.isOpen -> menu.keyboard.close()
             menu.capturingKey != null -> menu.capturingKey = null
             menu.sheet != null -> menu.sheet = null
+            // В браузере сначала выход из полноэкранного видео и прошлые страницы.
+            host.place != PanelPlace.Hidden && menu.mode == VrMenuState.Mode.Menu && menu.library.browser.goBack() -> Unit
             menu.title != null -> leaveToHub()
             host.place == PanelPlace.Hidden -> showMenu(VrMenuState.Tab.Home)
             menu.tab != VrMenuState.Tab.Home -> menu.tab = VrMenuState.Tab.Home

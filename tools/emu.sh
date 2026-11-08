@@ -12,6 +12,7 @@
 #   tools/emu.sh aim PX PY        точно навести взгляд на точку панели, пиксели дисплея 1280×800; за краем — меньше 0 или больше размера
 #   tools/emu.sh angle YAW PITCH  точно задать взгляд в градусах: YAW — влево, PITCH — вверх
 #   tools/emu.sh free             вернуть взгляд трекингу
+#   tools/emu.sh browse URL       открыть браузер на странице
 #   tools/emu.sh open URI,URI     открыть очередь файлов, как при выборе в меню; формат — по имени файла
 #   tools/emu.sh press            нажать кнопку шлема и держать
 #   tools/emu.sh release          отпустить
@@ -139,6 +140,9 @@ release)
     ;;
 open)
     command --es cmd open --es uris "${2:?адреса через запятую}"
+    ;;
+browse)
+    command --es cmd browse --es url "${2:?адрес}"
     ;;
 state)
     command --es cmd state

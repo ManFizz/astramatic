@@ -906,4 +906,37 @@ class PanelControllerTest {
 
         assertFalse(menu.keyboard.isOpen)
     }
+
+    // --- Браузер: BR-07 -----------------------------------------------------------------------------
+
+    @Test
+    fun `back in the browser goes to the previous page first`() {
+        panels.showMenu(VrMenuState.Tab.Home)
+        menu.library.openBrowser()
+        var pages = 2
+        menu.library.browser.back = com.manfis.astramatic.ui.BrowserBack { if (pages > 0) { pages--; true } else false }
+
+        panels.goBack()
+        panels.goBack()
+        assertEquals(0, pages)
+        assertTrue(menu.library.backStack.last() is Screen.Browser)
+
+        panels.goBack()
+        assertEquals(Screen.Home, menu.library.backStack.last())
+        assertEquals(PanelPlace.Vr, host.place)
+    }
+
+    @Test
+    fun `keyboard closes before the browser goes back`() {
+        panels.showMenu(VrMenuState.Tab.Home)
+        menu.library.openBrowser()
+        var backs = 0
+        menu.library.browser.back = com.manfis.astramatic.ui.BrowserBack { backs++; true }
+        openKeyboard()
+
+        panels.goBack()
+
+        assertFalse(menu.keyboard.isOpen)
+        assertEquals(0, backs)
+    }
 }
