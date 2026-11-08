@@ -130,6 +130,13 @@ fun SettingsScreen(modifier: Modifier = Modifier) {
         DefaultFormatPicker("Видео", settings.defaultVideoFormat) { settings.defaultVideoFormat = it }
         DefaultFormatPicker("Фото", settings.defaultImageFormat) { settings.defaultImageFormat = it }
 
+        SectionTitle("Формат частично распознанных медиа")
+        Hint(
+            "Известно, что это VR, но не какой: тег vr, virtual reality, virtual-reality и подобные у файла в Darkframe " +
+                "или «vr» в имени — без 180, 360, SBS. Если раскладка стерео указана, она остаётся своей.",
+        )
+        DefaultFormatPicker("VR без подробностей", settings.partialFormat) { settings.partialFormat = it }
+
         SectionTitle("Шлем без кнопки")
         SwitchRow(
             title = "Нажатие взглядом",

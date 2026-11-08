@@ -71,6 +71,9 @@ class AppSettings internal constructor(private val prefs: SharedPreferences) {
     var defaultVideoFormat by pref("default_video_format", "Dome180|SideBySide|180|0")
     var defaultImageFormat by pref("default_image_format", "Flat|Mono|180|0")
 
+    /** Формат частично распознанных медиа: есть тег VR, но не ясно какой. Обычно это VR180 бок о бок. */
+    var partialFormat by pref("partial_format", "Dome180|SideBySide|180|0")
+
     val keys = KeyBindings(prefs)
 
     private fun <T> pref(key: String, default: T) = object : ReadWriteProperty<Any?, T> {

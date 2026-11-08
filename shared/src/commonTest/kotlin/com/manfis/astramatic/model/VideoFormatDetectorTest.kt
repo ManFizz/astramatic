@@ -2,6 +2,7 @@ package com.manfis.astramatic.model
 
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 
 class VideoFormatDetectorTest {
@@ -45,5 +46,52 @@ class VideoFormatDetectorTest {
         assertNull(detect("holiday.mp4"))
         // Число в названии — не тег проекции.
         assertNull(detect("Top 1800 goals.mp4"))
+    }
+
+    // --- Частично распознанные: LIB-19 ----------------------------------------------------------------
+
+    private val partial = VideoFormat(Projection.Sphere360, StereoLayout.TopBottom)
+
+    @Test
+    fun vrTagWithoutDetailsTakesThePartialFormat() {
+        for (tag in listOf("vr", "VR", "virtual reality", "Virtual-Reality", "virtualreality", "virtual_reality", "VR video", "виртуальная реальность")) {
+            assertEquals(partial, VideoFormatDetector.detect("clip.mp4 Прогулка", listOf("пляж", tag), partial), tag)
+        }
+    }
+
+    @Test
+    fun vrInTheNameCountsToo() {
+        assertEquals(partial, VideoFormatDetector.detect("Trip_VR.mp4", emptyList(), partial))
+        assertEquals(partial, VideoFormatDetector.detect("clip.mp4 Концерт в VR", emptyList(), partial))
+    }
+
+    @Test
+    fun exactTagsWinOverThePartialFormat() {
+        val dome = VideoFormat(Projection.Dome180, StereoLayout.SideBySide)
+        assertEquals(dome, VideoFormatDetector.detect("clip.mp4", listOf("vr", "180", "sbs"), partial))
+        assertEquals(dome, VideoFormatDetector.detect("clip_180_LR.mp4", listOf("vr"), partial))
+        assertEquals(VideoFormat(Projection.Sphere360, StereoLayout.Mono), VideoFormatDetector.detect("clip.mp4", listOf("360"), partial))
+    }
+
+    @Test
+    fun knownStereoStaysWithTheVrTag() {
+        assertEquals(
+            VideoFormat(Projection.Sphere360, StereoLayout.SideBySide),
+            VideoFormatDetector.detect("clip.mp4", listOf("vr", "sbs"), partial),
+        )
+    }
+
+    @Test
+    fun wordsThatOnlyContainVrAreNotVr() {
+        for (tag in listOf("vrata", "overview", "survey", "drvr", "время")) {
+            assertEquals(null, VideoFormatDetector.detect("clip.mp4", listOf(tag), partial), tag)
+            assertFalse(VideoFormatDetector.isVrTag(tag), tag)
+        }
+    }
+
+    @Test
+    fun noTagsKeepsTheOldBehaviour() {
+        assertEquals(null, VideoFormatDetector.detect("holiday.mp4", emptyList(), partial))
+        assertEquals(detect("Trip_180_LR.mp4"), VideoFormatDetector.detect("Trip_180_LR.mp4", emptyList(), partial))
     }
 }

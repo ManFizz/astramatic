@@ -17,9 +17,41 @@ object VideoFormatDetector {
     private val fovTag = Regex("(?:fisheye|mkx)(1[6-9]0|2[0-4]0)")
 
     /** null, если в имени нет ни одного известного тега. */
-    fun detect(fileName: String): VideoFormat? {
-        val tokens = fileName.substringBeforeLast('.').lowercase().split(Regex("[^a-z0-9]+")).toSet()
+    fun detect(fileName: String): VideoFormat? =
+        detect(fileName.substringBeforeLast('.').lowercase().split(Regex("[^a-z0-9]+")).toSet())
 
+    /**
+     * Формат по имени и тегам (Darkframe). Теги вроде `vr`, `virtual reality` говорят, что это VR,
+     * но не какой: тогда берётся [partial] — формат частично распознанных медиа. Если при этом
+     * известна раскладка стерео (`sbs`, `tb`), она остаётся своей.
+     * null — ничего не распознано, нужен формат по умолчанию.
+     */
+    fun detect(hint: String, tags: Collection<String>, partial: VideoFormat): VideoFormat? {
+        val words = (listOf(hint) + tags).flatMap { words(it) }.toSet()
+        val found = detect(words)
+        val vr = tags.any(::isVrTag) || isVrTag(hint)
+        return when {
+            !vr -> found
+            found == null -> partial
+            // Только стерео-тег: проекция неизвестна, а «плоское» для VR неверно.
+            found.projection == Projection.Flat -> partial.copy(stereo = found.stereo)
+            else -> found
+        }
+    }
+
+    /** Тег или имя говорят «это VR»: `vr`, `VR video`, `virtual-reality`, `виртуальная реальность`. */
+    fun isVrTag(text: String): Boolean {
+        val words = words(text)
+        if (words.any { it in vrWords }) return true
+        return words.joinToString("") in vrPhrases
+    }
+
+    private val vrWords = setOf("vr", "вр", "virtualreality", "vrvideo", "vrfilm", "vrmovie", "3dvr", "vr3d")
+    private val vrPhrases = setOf("virtualreality", "виртуальнаяреальность", "vrvideo", "vrфильм", "vrвидео")
+
+    private fun words(text: String) = text.lowercase().split(Regex("[^\\p{L}\\p{N}]+")).filter { it.isNotEmpty() }
+
+    private fun detect(tokens: Set<String>): VideoFormat? {
         val projection = when {
             tokens.any { it in eac } -> Projection.Eac360
             tokens.any { it in fisheye } -> Projection.Fisheye

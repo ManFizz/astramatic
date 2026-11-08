@@ -171,8 +171,9 @@ fun LibraryApp(
         hint: String = name,
         darkframe: DarkframeRef? = null,
         thumbnail: String? = null,
+        tags: List<String> = emptyList(),
     ) = PlaylistItem(
-        uri, name, VideoFormatDetector.detect(hint) ?: DefaultFormat.forFile(context, image), darkframe,
+        uri, name, DefaultFormat.resolve(context, hint, tags, image), darkframe,
         isImage = image, thumbnail = thumbnail,
     )
 
@@ -180,7 +181,7 @@ fun LibraryApp(
     fun play(entry: MediaEntry, folder: List<MediaEntry>) {
         val files = folder.filter { !it.isDirectory && it.playUri != null }
         val index = files.indexOf(entry).takeIf { it >= 0 } ?: return
-        onPlay(Playlist(files.map { item(it.playUri!!, it.name, it.isImage, it.formatHint, it.darkframe, it.thumbnail) }, index))
+        onPlay(Playlist(files.map { item(it.playUri!!, it.name, it.isImage, it.formatHint, it.darkframe, it.thumbnail, it.tags) }, index))
     }
 
     when (val screen = backStack.last()) {
@@ -508,7 +509,7 @@ private fun BrowseScreen(
                         Column(Modifier.weight(1f)) {
                             Text(entry.name, style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
                             if (!entry.isDirectory) {
-                                val format = VideoFormatDetector.detect(entry.formatHint)
+                                val format = VideoFormatDetector.detect(entry.formatHint, entry.tags, DefaultFormat.partial(context))
                                 val details = listOfNotNull(
                                     formatSize(entry.size).takeIf { entry.size > 0 },
                                     format?.let { "${projectionLabel(it.projection)} ${stereoLabel(it.stereo)}" },
@@ -748,6 +749,12 @@ private val MEDIA_PERMISSIONS = arrayOf(Manifest.permission.READ_MEDIA_VIDEO, Ma
 
 /** Формат файлов без тегов в имени: свой для видео и для фото (меняется в «Настройках»). */
 internal object DefaultFormat {
+    /** Формат файла: по тегам в имени и у источника; тег VR без подробностей — формат частично распознанных; иначе по умолчанию. */
+    fun resolve(context: Context, hint: String, tags: List<String>, image: Boolean): VideoFormat =
+        VideoFormatDetector.detect(hint, tags, partial(context)) ?: forFile(context, image)
+
+    fun partial(context: Context): VideoFormat = VideoFormat.decode(AppSettings.get(context).partialFormat) ?: VideoFormat()
+
     fun forFile(context: Context, image: Boolean): VideoFormat {
         val settings = AppSettings.get(context)
         return VideoFormat.decode(if (image) settings.defaultImageFormat else settings.defaultVideoFormat) ?: VideoFormat()

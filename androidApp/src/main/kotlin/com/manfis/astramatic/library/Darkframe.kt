@@ -79,6 +79,8 @@ object DarkframeClient {
         val size: Long,
         val videoUrl: String,
         val thumbUrl: String,
+        /** Теги Darkframe: по ним узнаётся VR, когда в имени ничего нет. */
+        val tags: List<String> = emptyList(),
     ) {
         val isVideo: Boolean get() = mimeType.startsWith("video/") || (mimeType.isEmpty() && VideoFiles.isVideo(fileName))
         val isImage: Boolean get() = mimeType.startsWith("image/") || (mimeType.isEmpty() && VideoFiles.isImage(fileName))
@@ -174,6 +176,7 @@ object DarkframeClient {
                 size = it.optLong("size"),
                 videoUrl = it.optString("originalPath"),
                 thumbUrl = it.optString("thumbPath"),
+                tags = it.optJSONArray("tags")?.let { array -> List(array.length()) { i -> array.optString(i) } }.orEmpty(),
             )
         }
     }

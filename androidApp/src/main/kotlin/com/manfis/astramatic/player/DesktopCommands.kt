@@ -72,7 +72,7 @@ class DesktopPlaylists(
             val index = videos.indexOfFirst { it.path == command.itemId }.takeIf { it >= 0 } ?: return@execute
             val items = videos.map {
                 PlaylistItem(
-                    it.playUri!!, it.name, VideoFormatDetector.detect(it.formatHint) ?: DefaultFormat.forFile(context, it.isImage),
+                    it.playUri!!, it.name, DefaultFormat.resolve(context, it.formatHint, it.tags, it.isImage),
                     it.darkframe, isImage = it.isImage, thumbnail = it.thumbnail,
                 )
             }

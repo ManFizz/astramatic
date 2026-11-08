@@ -30,6 +30,8 @@ data class MediaEntry(
     val thumbnail: String? = null,
     /** По этой строке угадывается формат: у Darkframe теги могут быть в имени файла, а не в названии. */
     val formatHint: String = name,
+    /** Теги источника (Darkframe): `vr` и подобные делают файл частично распознанным. */
+    val tags: List<String> = emptyList(),
     val darkframe: DarkframeRef? = null,
     val isImage: Boolean = false,
 )
@@ -116,6 +118,7 @@ class MediaLibrary(context: Context) {
             playUri = Uri.parse(item.videoUrl),
             thumbnail = item.thumbUrl,
             formatHint = "${item.fileName} ${item.title}",
+            tags = item.tags,
             darkframe = DarkframeRef(serverId, item.id).takeIf { item.isVideo },
             isImage = item.isImage,
         )
